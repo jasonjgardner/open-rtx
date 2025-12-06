@@ -48,13 +48,29 @@ jobs:
 
       - name: Download vanilla material.bin files
         run: |
+          set -e
           mkdir -p vanilla
-          curl -sL "${{ env.VANILLA_BASE_URL }}/RTXStub.material.bin" -o vanilla/RTXStub.material.bin
-          curl -sL "${{ env.VANILLA_BASE_URL }}/RTXPostFX.material.bin" -o vanilla/RTXPostFX.material.bin
-          curl -sL "${{ env.VANILLA_BASE_URL }}/RTXPostFX.Tonemapping.material.bin" -o vanilla/RTXPostFX.Tonemapping.material.bin
-          curl -sL "${{ env.VANILLA_BASE_URL }}/RTXPostFX.Bloom.material.bin" -o vanilla/RTXPostFX.Bloom.material.bin
+          echo "Downloading RTXStub.material.bin..."
+          curl -fSL "${{ env.VANILLA_BASE_URL }}/RTXStub.material.bin" -o vanilla/RTXStub.material.bin
+          echo "Downloading RTXPostFX.material.bin..."
+          curl -fSL "${{ env.VANILLA_BASE_URL }}/RTXPostFX.material.bin" -o vanilla/RTXPostFX.material.bin
+          echo "Downloading RTXPostFX.Tonemapping.material.bin..."
+          curl -fSL "${{ env.VANILLA_BASE_URL }}/RTXPostFX.Tonemapping.material.bin" -o vanilla/RTXPostFX.Tonemapping.material.bin
+          echo "Downloading RTXPostFX.Bloom.material.bin..."
+          curl -fSL "${{ env.VANILLA_BASE_URL }}/RTXPostFX.Bloom.material.bin" -o vanilla/RTXPostFX.Bloom.material.bin
           echo "Downloaded vanilla materials:"
           ls -la vanilla/
+          echo "File sizes:"
+          du -h vanilla/*
+          # Verify files are not empty/error pages
+          for f in vanilla/*.bin; do
+            size=$(stat -c%s "$f")
+            if [ "$size" -lt 10000 ]; then
+              echo "ERROR: $f is too small ($size bytes) - download may have failed"
+              exit 1
+            fi
+          done
+          echo "All files verified OK"
 
       - name: Download shaderc (veka0 bgfx-mcbe)
         run: |
