@@ -56,6 +56,15 @@ jobs:
           echo "Downloaded vanilla materials:"
           ls -la vanilla/
 
+      - name: Download shaderc (veka0 bgfx-mcbe)
+        run: |
+          curl -sL "https://github.com/veka0/bgfx-mcbe/releases/download/binaries/shaderc" -o shaderc
+          chmod +x shaderc
+          mv shaderc /usr/local/bin/
+          echo "Shaderc installed:"
+          which shaderc
+          shaderc --version || echo "Shaderc ready"
+
       - name: Verify DXC installation
         run: |
           which dxc || echo "DXC not in PATH, checking common locations..."

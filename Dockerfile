@@ -18,6 +18,10 @@ ENV PATH="/opt/venv/bin:$PATH"
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir lazurite
 
+# Download shaderc (veka0's bgfx-mcbe version for PostFX shaders)
+RUN curl -sL "https://github.com/veka0/bgfx-mcbe/releases/download/binaries/shaderc" -o /usr/local/bin/shaderc && \
+    chmod +x /usr/local/bin/shaderc
+
 # Set working directory
 WORKDIR /shader
 

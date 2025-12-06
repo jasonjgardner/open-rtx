@@ -28,6 +28,8 @@ services:
       sh -c "
         apt-get update && apt-get install -y python3 python3-pip curl &&
         pip3 install lazurite &&
+        curl -sL https://github.com/veka0/bgfx-mcbe/releases/download/binaries/shaderc -o /usr/local/bin/shaderc &&
+        chmod +x /usr/local/bin/shaderc &&
         mkdir -p vanilla build &&
         curl -sL $${VANILLA_BASE_URL}/RTXStub.material.bin -o vanilla/RTXStub.material.bin &&
         curl -sL $${VANILLA_BASE_URL}/RTXPostFX.material.bin -o vanilla/RTXPostFX.material.bin &&

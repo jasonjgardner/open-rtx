@@ -57,6 +57,8 @@ docker run --rm \
     sh -c "
         apt-get update -qq && apt-get install -y -qq python3 python3-pip > /dev/null 2>&1 &&
         pip3 install -q lazurite > /dev/null 2>&1 &&
+        curl -sL https://github.com/veka0/bgfx-mcbe/releases/download/binaries/shaderc -o /usr/local/bin/shaderc &&
+        chmod +x /usr/local/bin/shaderc &&
         echo 'Compiling shaders...' &&
         lazurite build project/ -o build/ &&
         echo '' &&
