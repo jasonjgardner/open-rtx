@@ -34,15 +34,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install dependencies
+      - name: Install Python and pip
         run: |
-          pip install --upgrade pip
-          pip install lazurite-mc
+          apt-get update
+          apt-get install -y python3 python3-pip python3-venv curl
+          python3 --version
+          pip3 --version
+
+      - name: Install Lazurite
+        run: |
+          pip3 install --break-system-packages lazurite-mc
+          lazurite --version || echo "Lazurite installed"
 
       - name: Download vanilla material.bin files
         run: |
@@ -64,7 +66,7 @@ jobs:
       - name: Run template generation script
         run: |
           cd src
-          python script.py
+          python3 script.py
         continue-on-error: true
 
       - name: Build shaders with Lazurite
