@@ -37,7 +37,7 @@ jobs:
       - name: Install Python and pip
         run: |
           apt-get update
-          apt-get install -y python3 python3-pip python3-venv curl
+          apt-get install -y python3 python3-pip python3-venv curl libstdc++6 libc6
           python3 --version
           pip3 --version
 
@@ -83,8 +83,10 @@ jobs:
       - name: Build shaders with Lazurite
         run: |
           mkdir -p build
-          # Test shaderc on a simple shader first
-          echo "Testing shaderc..."
+          exec > >(tee build/build.log) 2>&1
+
+          echo "=== SHADERC TEST ==="
+          echo "Testing shaderc directly..."
           shaderc -f project/RTXPostFX.Tonemapping/shaders/fragment.sc \
             -o /tmp/test.bin \
             --type fragment \
@@ -92,15 +94,21 @@ jobs:
             -i project/include \
             -i project/RTXPostFX.Tonemapping/shaders \
             --varyingdef project/RTXPostFX.Tonemapping/shaders/varying.def.sc \
-            2>&1 || echo "Shaderc test failed (expected - trying lazurite build)"
-          # Run lazurite build with verbose output
+            2>&1 || echo "Shaderc direct test completed with errors (this is informational)"
+
+          echo ""
+          echo "=== LAZURITE BUILD ==="
           echo "Running lazurite build..."
           lazurite build project/ -o build/ -v 2>&1 || {
-            echo "Build failed. Checking project structure..."
+            echo ""
+            echo "=== BUILD FAILED ==="
+            echo "Project structure:"
             ls -laR project/
             exit 1
           }
-          echo "Build complete. Output files:"
+          echo ""
+          echo "=== BUILD SUCCESS ==="
+          echo "Output files:"
           ls -la build/
 
       - name: Upload shader artifacts
@@ -118,6 +126,15 @@ jobs:
           name: openrtx-full-build-${{ github.sha }}
           path: build/
           retention-days: 14
+          if-no-files-found: warn
+
+      - name: Upload build log (always)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-log-${{ github.sha }}
+          path: build/build.log
+          retention-days: 7
           if-no-files-found: warn
 
   release:
