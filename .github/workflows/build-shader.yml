@@ -110,7 +110,12 @@ jobs:
           cat project/project.json 2>&1 | tee -a build/build.log
           echo "" | tee -a build/build.log
           echo "=== LAZURITE BUILD ===" | tee -a build/build.log
-          lazurite build project/ -o build/ -v 2>&1 | tee -a build/build.log
+          echo "Lazurite version and help:" | tee -a build/build.log
+          lazurite --version 2>&1 | tee -a build/build.log || true
+          lazurite build --help 2>&1 | tee -a build/build.log || true
+          echo "" | tee -a build/build.log
+          echo "Running build command..." | tee -a build/build.log
+          lazurite build project/ -o build/ 2>&1 | tee -a build/build.log
           BUILD_STATUS=$?
           echo "" | tee -a build/build.log
           echo "=== BUILD RESULT (exit code: $BUILD_STATUS) ===" | tee -a build/build.log
