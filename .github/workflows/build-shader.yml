@@ -97,12 +97,26 @@ jobs:
 
       - name: Build shaders with Lazurite
         run: |
+          set -o pipefail
+          echo "" | tee -a build/build.log
+          echo "=== PRE-BUILD CHECK ===" | tee -a build/build.log
+          echo "Vanilla materials:" | tee -a build/build.log
+          ls -la vanilla/ 2>&1 | tee -a build/build.log
+          echo "" | tee -a build/build.log
+          echo "Project structure:" | tee -a build/build.log
+          ls -la project/ 2>&1 | tee -a build/build.log
+          echo "" | tee -a build/build.log
+          echo "Project.json:" | tee -a build/build.log
+          cat project/project.json 2>&1 | tee -a build/build.log
           echo "" | tee -a build/build.log
           echo "=== LAZURITE BUILD ===" | tee -a build/build.log
           lazurite build project/ -o build/ -v 2>&1 | tee -a build/build.log
+          BUILD_STATUS=$?
           echo "" | tee -a build/build.log
-          echo "=== BUILD COMPLETE ===" | tee -a build/build.log
-          ls -la build/ | tee -a build/build.log
+          echo "=== BUILD RESULT (exit code: $BUILD_STATUS) ===" | tee -a build/build.log
+          echo "Build directory contents:" | tee -a build/build.log
+          ls -la build/ 2>&1 | tee -a build/build.log
+          exit $BUILD_STATUS
 
       - name: Upload shader artifacts
         uses: actions/upload-artifact@v4
