@@ -398,6 +398,57 @@ float3 computeStarField(float3 rayDir, float time)
 }
 
 // =============================================================================
+// COLOR TEMPERATURE (BLACKBODY RADIATION)
+// =============================================================================
+
+// Approximate blackbody color from temperature (Kelvin)
+float3 blackbodyColor(float temperature)
+{
+    // Based on Tanner Helland's approximation
+    float temp = temperature / 100.0;
+    float3 color;
+
+    // Red
+    if (temp <= 66.0)
+    {
+        color.r = 1.0;
+    }
+    else
+    {
+        float t = temp - 60.0;
+        color.r = 1.29293618606 * pow(t, -0.1332047592);
+    }
+
+    // Green
+    if (temp <= 66.0)
+    {
+        color.g = 0.390081579 * log(temp) - 0.631841444;
+    }
+    else
+    {
+        float t = temp - 60.0;
+        color.g = 1.12989086089 * pow(t, -0.0755148492);
+    }
+
+    // Blue
+    if (temp >= 66.0)
+    {
+        color.b = 1.0;
+    }
+    else if (temp <= 19.0)
+    {
+        color.b = 0.0;
+    }
+    else
+    {
+        float t = temp - 10.0;
+        color.b = 0.543206789 * log(t) - 1.19625408914;
+    }
+
+    return saturate(color);
+}
+
+// =============================================================================
 // MAIN SKY FUNCTION
 // =============================================================================
 
@@ -481,57 +532,6 @@ SkyOutput evaluateSky(float3 rayDir, float3 sunDir, float3 moonDir, float time, 
     }
 
     return output;
-}
-
-// =============================================================================
-// COLOR TEMPERATURE (BLACKBODY RADIATION)
-// =============================================================================
-
-// Approximate blackbody color from temperature (Kelvin)
-float3 blackbodyColor(float temperature)
-{
-    // Based on Tanner Helland's approximation
-    float temp = temperature / 100.0;
-    float3 color;
-
-    // Red
-    if (temp <= 66.0)
-    {
-        color.r = 1.0;
-    }
-    else
-    {
-        float t = temp - 60.0;
-        color.r = 1.29293618606 * pow(t, -0.1332047592);
-    }
-
-    // Green
-    if (temp <= 66.0)
-    {
-        color.g = 0.390081579 * log(temp) - 0.631841444;
-    }
-    else
-    {
-        float t = temp - 60.0;
-        color.g = 1.12989086089 * pow(t, -0.0755148492);
-    }
-
-    // Blue
-    if (temp >= 66.0)
-    {
-        color.b = 1.0;
-    }
-    else if (temp <= 19.0)
-    {
-        color.b = 0.0;
-    }
-    else
-    {
-        float t = temp - 10.0;
-        color.b = 0.543206789 * log(t) - 1.19625408914;
-    }
-
-    return saturate(color);
 }
 
 // =============================================================================
