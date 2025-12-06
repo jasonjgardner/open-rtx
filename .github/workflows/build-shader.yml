@@ -1,0 +1,144 @@
+name: Build OpenRTX Shader
+
+on:
+  push:
+    branches:
+      - main
+      - 'claude/**'
+    paths:
+      - 'project/**'
+      - 'template/**'
+      - 'src/**'
+      - '.github/workflows/build-shader.yml'
+      - 'Dockerfile'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'project/**'
+      - 'template/**'
+      - 'src/**'
+  workflow_dispatch:
+
+env:
+  VANILLA_BASE_URL: https://static.bedrock.graphics.t3.storage.dev/vanilla/v23
+
+jobs:
+  build:
+    name: Build Shader
+    runs-on: ubuntu-latest
+    container:
+      image: jasongardner/dxc:latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install lazurite-mc
+
+      - name: Download vanilla material.bin files
+        run: |
+          mkdir -p vanilla
+          curl -sL "${{ env.VANILLA_BASE_URL }}/RTXStub.material.bin" -o vanilla/RTXStub.material.bin
+          curl -sL "${{ env.VANILLA_BASE_URL }}/RTXPostFX.material.bin" -o vanilla/RTXPostFX.material.bin
+          curl -sL "${{ env.VANILLA_BASE_URL }}/RTXPostFX.Tonemapping.material.bin" -o vanilla/RTXPostFX.Tonemapping.material.bin
+          curl -sL "${{ env.VANILLA_BASE_URL }}/RTXPostFX.Bloom.material.bin" -o vanilla/RTXPostFX.Bloom.material.bin
+          echo "Downloaded vanilla materials:"
+          ls -la vanilla/
+
+      - name: Verify DXC installation
+        run: |
+          which dxc || echo "DXC not in PATH, checking common locations..."
+          ls -la /usr/bin/dxc* 2>/dev/null || true
+          ls -la /opt/dxc* 2>/dev/null || true
+          dxc --version || echo "DXC version check failed"
+
+      - name: Run template generation script
+        run: |
+          cd src
+          python script.py
+        continue-on-error: true
+
+      - name: Build shaders with Lazurite
+        run: |
+          mkdir -p build
+          lazurite build project/ -o build/
+          echo "Build complete. Output files:"
+          ls -la build/
+
+      - name: Upload shader artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openrtx-shader-${{ github.sha }}
+          path: |
+            build/*.material.bin
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Upload full build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: openrtx-full-build-${{ github.sha }}
+          path: build/
+          retention-days: 14
+          if-no-files-found: warn
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: openrtx-shader-${{ github.sha }}
+          path: release/
+
+      - name: Create release archive
+        run: |
+          cd release
+          zip -r ../openrtx-shader.zip .
+
+      - name: Generate release tag
+        id: tag
+        run: |
+          echo "tag=v$(date +'%Y.%m.%d')-$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: OpenRTX Shader ${{ steps.tag.outputs.tag }}
+          body: |
+            ## OpenRTX Shader Build
+
+            Automated build from commit ${{ github.sha }}
+
+            ### Installation
+            1. Download `openrtx-shader.zip`
+            2. Extract the `.material.bin` files
+            3. Place in your Minecraft RTX resource pack
+
+            ### Features
+            - Physically-based BRDF (Frostbite Burley diffuse, GGX specular)
+            - Rayleigh/Mie atmospheric scattering
+            - Volumetric clouds with ray marching
+            - Advanced water rendering with waves
+            - Multiple tonemapping operators (ACES, Reinhard, etc.)
+            - Comprehensive post-processing effects
+          files: |
+            openrtx-shader.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
