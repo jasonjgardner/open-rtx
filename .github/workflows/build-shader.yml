@@ -63,7 +63,9 @@ jobs:
           mv shaderc /usr/local/bin/
           echo "Shaderc installed:"
           which shaderc
-          shaderc --version || echo "Shaderc ready"
+          # Check library dependencies
+          ldd /usr/local/bin/shaderc || echo "ldd check skipped (static binary or not available)"
+          shaderc --help 2>&1 | head -30 || echo "Shaderc help not available"
 
       - name: Verify DXC installation
         run: |
@@ -81,7 +83,23 @@ jobs:
       - name: Build shaders with Lazurite
         run: |
           mkdir -p build
-          lazurite build project/ -o build/
+          # Test shaderc on a simple shader first
+          echo "Testing shaderc..."
+          shaderc -f project/RTXPostFX.Tonemapping/shaders/fragment.sc \
+            -o /tmp/test.bin \
+            --type fragment \
+            --platform linux \
+            -i project/include \
+            -i project/RTXPostFX.Tonemapping/shaders \
+            --varyingdef project/RTXPostFX.Tonemapping/shaders/varying.def.sc \
+            2>&1 || echo "Shaderc test failed (expected - trying lazurite build)"
+          # Run lazurite build with verbose output
+          echo "Running lazurite build..."
+          lazurite build project/ -o build/ -v 2>&1 || {
+            echo "Build failed. Checking project structure..."
+            ls -laR project/
+            exit 1
+          }
           echo "Build complete. Output files:"
           ls -la build/
 
