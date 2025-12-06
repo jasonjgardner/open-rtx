@@ -25,7 +25,7 @@ WORKDIR /shader
 COPY . .
 
 # Download vanilla materials (can be overridden at build time)
-ARG VANILLA_BASE_URL=https://static.bedrock.graphics.t3.storage.dev/vanilla/v23
+ARG VANILLA_BASE_URL=https://cdn.bedrock.graphics/vanilla/v23
 RUN mkdir -p vanilla && \
     curl -sL "${VANILLA_BASE_URL}/RTXStub.material.bin" -o vanilla/RTXStub.material.bin && \
     curl -sL "${VANILLA_BASE_URL}/RTXPostFX.material.bin" -o vanilla/RTXPostFX.material.bin && \

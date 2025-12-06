@@ -4,7 +4,7 @@
 
 set -e
 
-VANILLA_BASE_URL="https://static.bedrock.graphics.t3.storage.dev/vanilla/v23"
+VANILLA_BASE_URL="https://cdn.bedrock.graphics/vanilla/v23"
 BUILD_DIR="./build"
 VANILLA_DIR="./vanilla"
 
