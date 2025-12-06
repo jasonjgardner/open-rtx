@@ -43,7 +43,7 @@ jobs:
 
       - name: Install Lazurite
         run: |
-          pip3 install --break-system-packages lazurite-mc
+          pip3 install --break-system-packages lazurite
           lazurite --version || echo "Lazurite installed"
 
       - name: Download vanilla material.bin files

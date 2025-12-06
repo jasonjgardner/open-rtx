@@ -56,7 +56,7 @@ docker run --rm \
     jasongardner/dxc:latest \
     sh -c "
         apt-get update -qq && apt-get install -y -qq python3 python3-pip > /dev/null 2>&1 &&
-        pip3 install -q lazurite-mc > /dev/null 2>&1 &&
+        pip3 install -q lazurite > /dev/null 2>&1 &&
         echo 'Compiling shaders...' &&
         lazurite build project/ -o build/ &&
         echo '' &&
