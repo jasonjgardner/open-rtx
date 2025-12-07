@@ -22,6 +22,7 @@ on:
 
 env:
   VANILLA_BASE_URL: https://cdn.bedrock.graphics/vanilla/v23
+  VANILLA_VERSION: v23
 
 jobs:
   build:
@@ -34,19 +35,35 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Python and pip
+      - name: Install system dependencies
         run: |
           apt-get update
-          apt-get install -y python3 python3-pip python3-venv curl libstdc++6 libc6
+          apt-get install -y python3 python3-pip python3-venv curl libstdc++6 libc6 unzip
           python3 --version
           pip3 --version
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-lazurite-${{ runner.os }}
+          restore-keys: |
+            pip-lazurite-
 
       - name: Install Lazurite
         run: |
           pip3 install --break-system-packages lazurite
           pip3 show lazurite | grep -E "^(Name|Version):"
 
+      - name: Cache vanilla materials
+        id: cache-vanilla
+        uses: actions/cache@v4
+        with:
+          path: vanilla/
+          key: vanilla-materials-${{ env.VANILLA_VERSION }}
+
       - name: Download vanilla material.bin files
+        if: steps.cache-vanilla.outputs.cache-hit != 'true'
         run: |
           set -e
           mkdir -p vanilla
@@ -58,26 +75,38 @@ jobs:
           curl -fSL "${{ env.VANILLA_BASE_URL }}/RTXPostFX.Bloom.material.bin" -o vanilla/RTXPostFX.Bloom.material.bin
           echo "Downloaded vanilla materials:"
           ls -la vanilla/
-          echo "All files downloaded OK"
+
+      - name: Verify vanilla materials
+        run: |
+          echo "Vanilla materials:"
+          ls -la vanilla/
+
+      - name: Cache shaderc
+        id: cache-shaderc
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/bin/shaderc
+          key: shaderc-linux-x64-bgfx-mcbe
 
       - name: Download shaderc (veka0 bgfx-mcbe)
+        if: steps.cache-shaderc.outputs.cache-hit != 'true'
         run: |
-          apt-get install -y unzip
           curl -sL "https://github.com/veka0/bgfx-mcbe/releases/download/binaries/shaderc-linux-x64.zip" -o shaderc.zip
           unzip shaderc.zip
-          chmod +x shaderc
-          mv shaderc /usr/local/bin/
+          chmod +x shadercRelease
+          mv shadercRelease /usr/local/bin/shaderc
+          rm -f shaderc.zip
+
+      - name: Verify shaderc installation
+        run: |
           echo "Shaderc installed:"
           which shaderc
-          # Check library dependencies
-          ldd /usr/local/bin/shaderc || echo "ldd check skipped (static binary or not available)"
-          shaderc --help 2>&1 | head -30 || echo "Shaderc help not available"
+          ls -la /usr/local/bin/shaderc
+          shaderc --help 2>&1 | head -20 || echo "Shaderc help not available"
 
       - name: Verify DXC installation
         run: |
-          which dxc || echo "DXC not in PATH, checking common locations..."
-          ls -la /usr/bin/dxc* 2>/dev/null || true
-          ls -la /opt/dxc* 2>/dev/null || true
+          which dxc || echo "DXC not in PATH"
           dxc --version || echo "DXC version check failed"
 
       - name: Run template generation script
@@ -86,39 +115,13 @@ jobs:
           python3 script.py
         continue-on-error: true
 
-      - name: Test shaderc
-        run: |
-          mkdir -p build
-          echo "=== SHADERC TEST ===" | tee build/build.log
-          echo "Testing shaderc directly..." | tee -a build/build.log
-          shaderc -f project/RTXPostFX.Tonemapping/shaders/fragment.sc \
-            -o /tmp/test.bin \
-            --type fragment \
-            --platform linux \
-            -i project/include \
-            -i project/RTXPostFX.Tonemapping/shaders \
-            --varyingdef project/RTXPostFX.Tonemapping/shaders/varying.def.sc \
-            2>&1 | tee -a build/build.log || true
-        continue-on-error: true
-
       - name: Build shaders with Lazurite
         run: |
           set -o pipefail
-          echo "" | tee -a build/build.log
-          echo "=== PRE-BUILD CHECK ===" | tee -a build/build.log
+          mkdir -p build
+          echo "=== LAZURITE BUILD ===" | tee build/build.log
           echo "Vanilla materials:" | tee -a build/build.log
           ls -la vanilla/ 2>&1 | tee -a build/build.log
-          echo "" | tee -a build/build.log
-          echo "Project structure:" | tee -a build/build.log
-          ls -la project/ 2>&1 | tee -a build/build.log
-          echo "" | tee -a build/build.log
-          echo "Project.json:" | tee -a build/build.log
-          cat project/project.json 2>&1 | tee -a build/build.log
-          echo "" | tee -a build/build.log
-          echo "=== LAZURITE BUILD ===" | tee -a build/build.log
-          echo "Lazurite version and help:" | tee -a build/build.log
-          lazurite --version 2>&1 | tee -a build/build.log || true
-          lazurite build --help 2>&1 | tee -a build/build.log || true
           echo "" | tee -a build/build.log
           echo "Running build command..." | tee -a build/build.log
           lazurite build project/ -o build/ --shaderc /usr/local/bin/shaderc 2>&1 | tee -a build/build.log
