@@ -215,6 +215,17 @@ float2 rayCloudLayerIntersect(float3 rayOrigin, float3 rayDir)
     float cloudBottom = MC_CLOUD_HEIGHT;
     float cloudTop = MC_CLOUD_HEIGHT + CLOUD_THICKNESS;
 
+    // Guard against horizontal rays (rayDir.y near zero)
+    // Return no intersection for rays that won't hit the cloud layer
+    if (abs(rayDir.y) < 0.0001)
+    {
+        // Check if ray is inside cloud layer
+        if (rayOrigin.y >= cloudBottom && rayOrigin.y <= cloudTop)
+            return float2(0.0, 1000.0);  // Already inside, trace forward
+        else
+            return float2(0.0, 0.0);  // No intersection
+    }
+
     float tMin = (cloudBottom - rayOrigin.y) / rayDir.y;
     float tMax = (cloudTop - rayOrigin.y) / rayDir.y;
 

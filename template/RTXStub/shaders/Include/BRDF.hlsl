@@ -279,12 +279,21 @@ float3 diffuseOrenNayar(float3 albedo, float roughness, float NdotV, float NdotL
     float B = 0.45 * sigma2 / (sigma2 + 0.09);
 
     // Compute cos(phi_i - phi_o)
-    float3 Vt = normalize(V - N * NdotV);
-    float3 Lt = normalize(L - N * NdotL);
-    float cosPhi = max(0.0, dot(Vt, Lt));
+    // Guard against zero-length vectors when V or L is aligned with N
+    float3 VtRaw = V - N * NdotV;
+    float3 LtRaw = L - N * NdotL;
+    float VtLen = length(VtRaw);
+    float LtLen = length(LtRaw);
 
-    float thetaI = acos(NdotL);
-    float thetaR = acos(NdotV);
+    // When vectors are too short, cosPhi contribution is negligible
+    float cosPhi = 0.0;
+    if (VtLen > 0.001 && LtLen > 0.001)
+    {
+        cosPhi = max(0.0, dot(VtRaw / VtLen, LtRaw / LtLen));
+    }
+
+    float thetaI = acos(saturate(NdotL));
+    float thetaR = acos(saturate(NdotV));
     float alpha = max(thetaI, thetaR);
     float beta = min(thetaI, thetaR);
 
