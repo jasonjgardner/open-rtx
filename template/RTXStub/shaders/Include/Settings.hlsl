@@ -306,7 +306,16 @@
 
 // Mie phase function asymmetry (g parameter)
 #ifndef MIE_ASYMMETRY
-#define MIE_ASYMMETRY 0.76  // Forward scattering bias
+#define MIE_ASYMMETRY 0.76  // Forward scattering bias (vanilla: ~0.8)
+#endif
+
+// Ray marching quality settings
+#ifndef RAYLEIGH_PRIMARY_INTEGRAL_STEPS
+#define RAYLEIGH_PRIMARY_INTEGRAL_STEPS 16  // Primary ray samples (8-32, vanilla: 16)
+#endif
+
+#ifndef RAYLEIGH_LIGHT_INTEGRAL_STEPS
+#define RAYLEIGH_LIGHT_INTEGRAL_STEPS 0  // Light ray samples (0 = fast approximation, 4-8 for quality)
 #endif
 
 // Night sky

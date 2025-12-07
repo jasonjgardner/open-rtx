@@ -57,28 +57,37 @@ float phaseRayleigh(float cosTheta)
 }
 
 // Henyey-Greenstein phase function for Mie scattering
+// Uses fast math: x*sqrt(x) instead of pow(x,1.5)
 float phaseMieHG(float cosTheta, float g)
 {
     float g2 = g * g;
     float denom = 1.0 + g2 - 2.0 * g * cosTheta;
-    return (1.0 - g2) / (4.0 * kPi * pow(abs(denom), 1.5));
+    float denomSafe = max(abs(denom), 1e-5);
+    return (1.0 - g2) / (4.0 * kPi * denomSafe * sqrt(denomSafe));
 }
 
 // Cornette-Shanks phase function (improved Mie)
+// Uses fast math: x*sqrt(x) instead of pow(x,1.5)
 float phaseMieCS(float cosTheta, float g)
 {
     float g2 = g * g;
-    float num = 3.0 * (1.0 - g2) * (1.0 + cosTheta * cosTheta);
-    float denom = (8.0 * kPi) * (2.0 + g2) * pow(abs(1.0 + g2 - 2.0 * g * cosTheta), 1.5);
+    float cos2 = cosTheta * cosTheta;  // Fast: x*x instead of pow(x,2)
+    float num = 3.0 * (1.0 - g2) * (1.0 + cos2);
+    float base = max(abs(1.0 + g2 - 2.0 * g * cosTheta), 1e-5);
+    float denom = (8.0 * kPi) * (2.0 + g2) * base * sqrt(base);  // Fast: x*sqrt(x)
     return num / max(denom, 1e-7);
 }
 
 // Schlick approximation for phase function (faster)
+// O(1) complexity, good for real-time
 float phaseMieSchlick(float cosTheta, float g)
 {
-    float k = 1.55 * g - 0.55 * g * g * g;
+    float g2 = g * g;
+    float g3 = g2 * g;  // Fast: x*x*x instead of pow(x,3)
+    float k = 1.55 * g - 0.55 * g3;
     float denom = 1.0 - k * cosTheta;
-    return (1.0 - k * k) / (4.0 * kPi * denom * denom);
+    float denomSafe = max(abs(denom), 1e-5);
+    return (1.0 - k * k) / (4.0 * kPi * denomSafe * denomSafe);
 }
 
 // =============================================================================
@@ -122,11 +131,13 @@ float densityOzone(float height)
 // =============================================================================
 
 // Numerical integration for optical depth along a ray
+// Note: For performance, prefer approximateOpticalDepth() when accuracy permits
 float3 computeOpticalDepth(float3 rayOrigin, float3 rayDir, float rayLength, float3 planetCenter, int numSamples)
 {
-    float stepSize = rayLength / float(numSamples);
+    float stepSize = rayLength / max(float(numSamples), 1.0);  // Division safety
     float3 opticalDepth = 0.0;
 
+    [unroll]
     for (int i = 0; i < numSamples; i++)
     {
         float3 samplePos = rayOrigin + rayDir * (float(i) + 0.5) * stepSize;
@@ -146,18 +157,71 @@ float3 computeOpticalDepth(float3 rayOrigin, float3 rayDir, float rayLength, flo
 // CLOSED-FORM APPROXIMATIONS
 // =============================================================================
 
+// Fast erf() approximation (Abramowitz & Stegun)
+// Maximum error ~0.0005
+float erfApprox(float x)
+{
+    float ax = abs(x);
+    float t = 1.0 / (1.0 + 0.3275911 * ax);
+    float t2 = t * t;
+    float t3 = t2 * t;
+    float t4 = t3 * t;
+    float t5 = t4 * t;
+    float y = 1.0 - (0.254829592 * t - 0.284496736 * t2 + 1.421413741 * t3
+                    - 1.453152027 * t4 + 1.061405429 * t5) * exp(-x * x);
+    return sign(x) * y;
+}
+
+// Fast closed-form approximation for optical depth through exponential atmosphere
+// Uses erf() approximation for Gaussian integral - O(1) complexity vs O(n) ray marching
+// Based on: "Precomputed Atmospheric Scattering" (Bruneton & Neyret, 2008)
+//
+// Parameters:
+//   x_start: start distance along ray from planet center
+//   x_stop: end distance along ray
+//   z2: squared perpendicular distance from ray to planet center
+//   r: planet radius
+//   H: scale height
+float approximateAirColumnDensityRatio(float x_start, float x_stop, float z2, float r, float H)
+{
+    // Gaussian integral approximation for exponential density
+    float sigma = sqrt(2.0 * r * H);  // Standard deviation of density distribution
+    float sigmaSafe = max(sigma, 1e-5);
+
+    // Convert to normalized coordinates
+    float norm_start = x_start / sigmaSafe;
+    float norm_stop = x_stop / sigmaSafe;
+
+    // Height at closest approach to planet center
+    float h0 = sqrt(max(z2, 0.0)) - r;
+    float density0 = exp(-max(h0, 0.0) / H);
+
+    // Integral of Gaussian-like density profile
+    float erf_start = erfApprox(norm_start);
+    float erf_stop = erfApprox(norm_stop);
+
+    // Column density ratio (multiply by actual density for final value)
+    return density0 * sigmaSafe * kSqrtTwo * kInvSqrtTwo * (erf_stop - erf_start) * 0.5;
+}
+
 // Chapman function approximation for slant optical depth
+// More accurate than erf() method for high zenith angles
 float chapmanApprox(float X, float cosZenith)
 {
     float c = sqrt(X * kHalfPi);
+    float XcosZ = X * cosZenith;
+
     if (cosZenith >= 0.0)
     {
-        return c * rsqrt(X * cosZenith + 1.0) * exp(-X * (1.0 - cosZenith));
+        return c * rsqrt(max(XcosZ + 1.0, 1e-5)) * exp(-X * (1.0 - cosZenith));
     }
     else
     {
-        float sinZenith = sqrt(1.0 - cosZenith * cosZenith);
-        return 2.0 * c * exp(X * (sinZenith - 1.0)) - c * rsqrt(1.0 - X * cosZenith) * exp(-X * (1.0 + cosZenith));
+        float sin2Zenith = 1.0 - cosZenith * cosZenith;
+        float sinZenith = sqrt(max(sin2Zenith, 0.0));
+        float term1 = 2.0 * c * exp(X * (sinZenith - 1.0));
+        float term2 = c * rsqrt(max(1.0 - XcosZ, 1e-5)) * exp(-X * (1.0 + cosZenith));
+        return term1 - term2;
     }
 }
 
@@ -180,7 +244,50 @@ float3 approximateOpticalDepth(float height, float cosZenith)
 // SKY COLOR COMPUTATION
 // =============================================================================
 
+// Compute incident light optical depth using fast approximation or ray marching
+// When lightSamples == 0, uses O(1) closed-form approximation
+// Otherwise uses O(n) ray marching for higher accuracy
+float3 sampleLightOpticalDepth(float3 samplePos, float3 sunDir, float3 planetCenter, int lightSamples)
+{
+    float2 sunAtmoIntersect = raySphereIntersect(samplePos, sunDir, planetCenter, ATMOSPHERE_RADIUS);
+    float sunRayLength = sunAtmoIntersect.y;
+
+    // Quick check for shadow (planet blocking sun)
+    float2 sunPlanetIntersect = raySphereIntersect(samplePos, sunDir, planetCenter, EARTH_RADIUS);
+    if (sunPlanetIntersect.x > 0.0)
+    {
+        return float3(1e10, 1e10, 1e10);  // In shadow - infinite optical depth
+    }
+
+    float height = length(samplePos - planetCenter) - EARTH_RADIUS;
+
+#if RAYLEIGH_LIGHT_INTEGRAL_STEPS == 0
+    // Fast closed-form approximation (O(1) complexity)
+    float cosZenith = sunDir.y;  // Simplified: assume sun direction is zenith angle
+    return approximateOpticalDepth(height, cosZenith);
+#else
+    // Ray marching for higher quality (O(n) complexity)
+    float3 opticalDepthSun = 0.0;
+    float sunStepSize = sunRayLength / float(lightSamples);
+
+    [unroll]
+    for (int j = 0; j < lightSamples; j++)
+    {
+        float3 sunSamplePos = samplePos + sunDir * (float(j) + 0.5) * sunStepSize;
+        float sunHeight = length(sunSamplePos - planetCenter) - EARTH_RADIUS;
+
+        float sunDensityR = densityExponential(sunHeight, RAYLEIGH_SCALE_HEIGHT);
+        float sunDensityM = densityExponential(sunHeight, MIE_SCALE_HEIGHT);
+
+        opticalDepthSun += (kRayleighScattering * sunDensityR + (kMieScattering + kMieAbsorption) * sunDensityM) * sunStepSize;
+    }
+
+    return opticalDepthSun;
+#endif
+}
+
 // Compute sky color using single scattering
+// Uses configurable RAYLEIGH_PRIMARY_INTEGRAL_STEPS and RAYLEIGH_LIGHT_INTEGRAL_STEPS
 float3 computeSingleScatteringSky(float3 rayDir, float3 sunDir, float3 viewPos, int numSamples, int numLightSamples)
 {
     float3 planetCenter = float3(0.0, -EARTH_RADIUS, 0.0);
@@ -195,7 +302,7 @@ float3 computeSingleScatteringSky(float3 rayDir, float3 sunDir, float3 viewPos, 
     float rayLength = (planetIntersect.x > 0.0) ? planetIntersect.x : atmoIntersect.y;
     rayLength = max(0.0, rayLength - max(0.0, atmoIntersect.x));
 
-    float stepSize = rayLength / float(numSamples);
+    float stepSize = rayLength / max(float(numSamples), 1.0);  // Division safety
     float3 rayStart = viewPos + rayDir * max(0.0, atmoIntersect.x);
 
     float3 totalRayleigh = 0.0;
@@ -206,55 +313,36 @@ float3 computeSingleScatteringSky(float3 rayDir, float3 sunDir, float3 viewPos, 
     float phaseR = phaseRayleigh(cosTheta);
     float phaseM = phaseMieCS(cosTheta, MIE_ASYMMETRY);
 
+    // Primary ray march through atmosphere
     for (int i = 0; i < numSamples; i++)
     {
         float3 samplePos = rayStart + rayDir * (float(i) + 0.5) * stepSize;
         float height = length(samplePos - planetCenter) - EARTH_RADIUS;
 
-        // Local densities
+        // Local densities (exponential falloff)
         float densityR = densityExponential(height, RAYLEIGH_SCALE_HEIGHT);
         float densityM = densityExponential(height, MIE_SCALE_HEIGHT);
 
         // Optical depth from view to sample point
-        opticalDepthView += (kRayleighScattering * densityR + (kMieScattering + kMieAbsorption) * densityM) * stepSize;
+        float3 extinction = kRayleighScattering * densityR + (kMieScattering + kMieAbsorption) * densityM;
+        opticalDepthView += extinction * stepSize;
 
-        // Optical depth from sample to sun
-        float3 opticalDepthSun;
-        {
-            float2 sunAtmoIntersect = raySphereIntersect(samplePos, sunDir, planetCenter, ATMOSPHERE_RADIUS);
-            float sunRayLength = sunAtmoIntersect.y;
+        // Optical depth from sample to sun (fast or accurate based on settings)
+        float3 opticalDepthSun = sampleLightOpticalDepth(samplePos, sunDir, planetCenter, numLightSamples);
 
-            // Quick check for shadow
-            float2 sunPlanetIntersect = raySphereIntersect(samplePos, sunDir, planetCenter, EARTH_RADIUS);
-            if (sunPlanetIntersect.x > 0.0)
-            {
-                continue; // In shadow
-            }
+        // Skip if in shadow
+        if (opticalDepthSun.r > 1e9)
+            continue;
 
-            float sunStepSize = sunRayLength / float(numLightSamples);
-            opticalDepthSun = 0.0;
-
-            for (int j = 0; j < numLightSamples; j++)
-            {
-                float3 sunSamplePos = samplePos + sunDir * (float(j) + 0.5) * sunStepSize;
-                float sunHeight = length(sunSamplePos - planetCenter) - EARTH_RADIUS;
-
-                float sunDensityR = densityExponential(sunHeight, RAYLEIGH_SCALE_HEIGHT);
-                float sunDensityM = densityExponential(sunHeight, MIE_SCALE_HEIGHT);
-
-                opticalDepthSun += (kRayleighScattering * sunDensityR + (kMieScattering + kMieAbsorption) * sunDensityM) * sunStepSize;
-            }
-        }
-
-        // Transmittance
+        // Transmittance (Beer-Lambert law)
         float3 transmittance = exp(-(opticalDepthView + opticalDepthSun));
 
-        // Accumulate scattering
+        // Accumulate scattering contribution
         totalRayleigh += transmittance * densityR * stepSize;
         totalMie += transmittance * densityM * stepSize;
     }
 
-    // Final color
+    // Final color: phase functions * scattering coefficients * accumulated density
     float3 skyColor = SUN_INTENSITY * (totalRayleigh * kRayleighScattering * phaseR + totalMie * kMieScattering * phaseM);
 
     return skyColor;
@@ -477,12 +565,15 @@ SkyOutput evaluateSky(float3 rayDir, float3 sunDir, float3 moonDir, float time, 
         // Camera height above sea level (Minecraft Y=64 = sea level)
         float viewHeight = 1000.0; // Assume typical gameplay height
 
-        // Choose quality level based on performance
-    #if CLOUD_MARCH_STEPS > 32
-        // High quality: full ray marching
-        output.color = computeSingleScatteringSky(rayDir, sunDir, float3(0, EARTH_RADIUS + viewHeight, 0), 16, 8);
+        // Choose quality level based on settings
+        // RAYLEIGH_PRIMARY_INTEGRAL_STEPS: 8-32 (vanilla: 16)
+        // RAYLEIGH_LIGHT_INTEGRAL_STEPS: 0 = fast approximation, 4-8 = quality
+    #if RAYLEIGH_PRIMARY_INTEGRAL_STEPS > 0
+        // Ray marching with configurable quality
+        output.color = computeSingleScatteringSky(rayDir, sunDir, float3(0, EARTH_RADIUS + viewHeight, 0),
+                                                  RAYLEIGH_PRIMARY_INTEGRAL_STEPS, RAYLEIGH_LIGHT_INTEGRAL_STEPS);
     #else
-        // Lower quality: closed-form approximation
+        // Fastest: closed-form approximation only (O(1) complexity)
         output.color = computeSkyColorFast(rayDir, sunDir, viewHeight);
     #endif
 
