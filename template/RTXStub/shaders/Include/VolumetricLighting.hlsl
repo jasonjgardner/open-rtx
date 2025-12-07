@@ -60,11 +60,10 @@ float calcDensityModifier(float3 worldPos, float3 sunDir, bool isUnderwater)
         densityModifier *= heightFactor;
 
         // Noon fog reduction (less fog at midday)
-        #if NOON_FOG_REDUCTION != 1.0
+        // When NOON_FOG_REDUCTION = 1.0, this has no effect
         float dayFactor = saturate(sunDir.y * 2.0 + 0.5);
         float noonFactor = lerp(1.0, NOON_FOG_REDUCTION, dayFactor * dayFactor);
         densityModifier *= noonFactor;
-        #endif
     }
 
     return densityModifier;
