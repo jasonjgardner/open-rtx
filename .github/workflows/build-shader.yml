@@ -62,7 +62,9 @@ jobs:
 
       - name: Download shaderc (veka0 bgfx-mcbe)
         run: |
-          curl -sL "https://github.com/veka0/bgfx-mcbe/releases/download/binaries/shaderc" -o shaderc
+          apt-get install -y unzip
+          curl -sL "https://github.com/veka0/bgfx-mcbe/releases/download/binaries/shaderc-linux-x64.zip" -o shaderc.zip
+          unzip shaderc.zip
           chmod +x shaderc
           mv shaderc /usr/local/bin/
           echo "Shaderc installed:"
@@ -119,7 +121,7 @@ jobs:
           lazurite build --help 2>&1 | tee -a build/build.log || true
           echo "" | tee -a build/build.log
           echo "Running build command..." | tee -a build/build.log
-          lazurite build project/ -o build/ 2>&1 | tee -a build/build.log
+          lazurite build project/ -o build/ --shaderc /usr/local/bin/shaderc 2>&1 | tee -a build/build.log
           BUILD_STATUS=$?
           echo "" | tee -a build/build.log
           echo "=== BUILD RESULT (exit code: $BUILD_STATUS) ===" | tee -a build/build.log
