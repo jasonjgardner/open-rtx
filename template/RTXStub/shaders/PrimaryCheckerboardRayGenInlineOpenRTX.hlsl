@@ -276,8 +276,8 @@ float3 traceSingleReflection(float3 origin, float3 reflectDir, float3 normal, Op
         // Add ambient
         directLight += surfaceInfo.color * ctx.constantAmbient;
 
-        // Add emissive
-        directLight += surfaceInfo.color * surfaceInfo.emissive * 2.0;
+        // Add emissive (scaled by EMISSIVE_INTENSITY for visible glow)
+        directLight += surfaceInfo.color * surfaceInfo.emissive * EMISSIVE_INTENSITY;
 
         reflectionColor = directLight;
     }
@@ -536,8 +536,8 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
     // Apply color transmission from stained glass etc.
     light *= shadow.transmission;
 
-    // Apply emissive
-    light = lerp(light, 1, surfaceInfo.emissive);
+    // Apply emissive - boost light for emissive surfaces
+    light = lerp(light, EMISSIVE_INTENSITY, surfaceInfo.emissive);
 #endif
 
     // =================================================================

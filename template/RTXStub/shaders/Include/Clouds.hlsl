@@ -399,6 +399,11 @@ CloudOutput renderVolumetricClouds(float3 rayOrigin, float3 rayDir, float3 sunDi
     int numSteps = int(lerp(float(CLOUD_MARCH_STEPS), float(CLOUD_MARCH_STEPS) * 0.5, distanceLOD));
     float baseStepSize = rayLength / float(numSteps);
 
+    // Add jitter to break up banding artifacts
+    // Use ray direction as seed for spatial variation
+    float jitter = frac(sin(dot(rayDir.xz, float2(12.9898, 78.233)) + time * 0.1) * 43758.5453);
+    float jitterOffset = jitter * baseStepSize;
+
     // Phase function
     float cosTheta = dot(rayDir, sunDir);
     float phase = cloudPhaseFunction(cosTheta);
@@ -406,9 +411,10 @@ CloudOutput renderVolumetricClouds(float3 rayOrigin, float3 rayDir, float3 sunDi
     // Ambient light (from sky)
     float3 ambientColor = sunColor * 0.15;
 
-    // March through cloud layer
-    float3 currentPos = rayOrigin + rayDir * tMin;
-    float currentT = tMin;
+    // March through cloud layer (with jitter offset to reduce banding)
+    float startT = tMin + jitterOffset;
+    float3 currentPos = rayOrigin + rayDir * startT;
+    float currentT = startT;
     float accumulatedAlpha = 0.0;
 
     for (int i = 0; i < numSteps; i++)

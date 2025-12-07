@@ -334,7 +334,7 @@ float3 shadeSurfaceAmbientPBR(EnhancedSurface surface, OpenRTXContext ctx)
     // Emissive (never shadowed)
     if (surface.emissive > 0.0)
     {
-        result += surface.albedo * surface.emissive * 2.0;
+        result += surface.albedo * surface.emissive * EMISSIVE_INTENSITY;
     }
 
     return result;
@@ -359,26 +359,46 @@ float3 renderSkyWithClouds(float3 rayDir, OpenRTXContext ctx)
     float gradientT = saturate(rayDir.y * 0.5 + 0.5);
     float3 gameBaseSky = lerp(ctx.gameSkyColorDown, ctx.gameSkyColorUp, gradientT);
 
+    // Check if game sky colors are valid (non-zero)
+    float gameSkyLuminance = dot(gameBaseSky, float3(0.299, 0.587, 0.114));
+
+    // If game sky is too dark, use a fallback gradient
+    if (gameSkyLuminance < 0.01)
+    {
+        // Fallback: procedural sky gradient based on sun position
+        float dayFactor = getDayFactor(ctx.sunDir);
+        float3 dayZenith = float3(0.2, 0.4, 0.8);   // Blue sky
+        float3 dayHorizon = float3(0.6, 0.7, 0.9);  // Lighter at horizon
+        float3 nightZenith = float3(0.01, 0.01, 0.02);
+        float3 nightHorizon = float3(0.02, 0.02, 0.04);
+
+        float3 zenith = lerp(nightZenith, dayZenith, dayFactor);
+        float3 horizon = lerp(nightHorizon, dayHorizon, dayFactor);
+        gameBaseSky = lerp(horizon, zenith, saturate(rayDir.y));
+    }
+
     // Apply sky intensity adjustment from game, with minimum brightness
     float effectiveSkyIntensity = max(ctx.skyIntensityAdjustment, 0.5);
     gameBaseSky *= effectiveSkyIntensity;
 
     // Add constant ambient and ensure minimum sky brightness
     gameBaseSky += ctx.constantAmbient;
-    gameBaseSky = max(gameBaseSky, 0.05);  // Prevent completely black sky
+    gameBaseSky = max(gameBaseSky, 0.02);  // Prevent completely black sky
 
 #if OPENRTX_ENABLED && ENABLE_ATMOSPHERIC_SKY
-    // Enhanced atmospheric scattering (blended with game sky)
+    // Enhanced atmospheric scattering (additive, not replacing)
     SkyOutput sky = evaluateSky(rayDir, ctx.sunDir, ctx.moonDir, ctx.time, true);
 
+    // Ensure atmospheric sky also has minimum brightness
+    sky.color = max(sky.color, 0.01);
+
     // Blend physical sky with game-provided colors
-    // Use game colors as base, add atmospheric enhancement
     float skyDayFactor = getDayFactor(ctx.sunDir);
 
-    // During day: blend atmospheric scattering with game sky
-    // During night: use game sky colors more directly
-    float atmosphericBlend = skyDayFactor * 0.5; // 50% atmospheric during day
-    skyColor = lerp(gameBaseSky, sky.color, atmosphericBlend);
+    // Use game sky as base, blend in atmospheric enhancement
+    // Lower blend factor to preserve game sky colors better
+    float atmosphericBlend = skyDayFactor * 0.3; // 30% atmospheric during day
+    skyColor = lerp(gameBaseSky, gameBaseSky + sky.color * 0.5, atmosphericBlend);
 
     // Always add sun disk from physical model
     skyColor += sky.sunDiskColor;

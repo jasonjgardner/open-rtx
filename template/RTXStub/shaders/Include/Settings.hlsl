@@ -138,6 +138,12 @@
 #define FIX_ENTITY_EMISSIVE 1  // Detect emissive entities via alpha
 #endif
 
+// Emissive intensity multiplier
+// Controls how bright emissive surfaces appear
+#ifndef EMISSIVE_INTENSITY
+#define EMISSIVE_INTENSITY 4.0  // Default intensity for emissive surfaces
+#endif
+
 // =============================================================================
 // BRDF SETTINGS
 // =============================================================================
