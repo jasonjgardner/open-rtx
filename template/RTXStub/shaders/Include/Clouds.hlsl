@@ -399,17 +399,23 @@ CloudOutput renderVolumetricClouds(float3 rayOrigin, float3 rayDir, float3 sunDi
     int numSteps = int(lerp(float(CLOUD_MARCH_STEPS), float(CLOUD_MARCH_STEPS) * 0.5, distanceLOD));
     float baseStepSize = rayLength / float(numSteps);
 
-    // Add jitter to break up banding artifacts
-    // Use ray direction as seed for spatial variation
-    float jitter = frac(sin(dot(rayDir.xz, float2(12.9898, 78.233)) + time * 0.1) * 43758.5453);
+    // Blue noise-style jitter using interleaved gradient noise
+    // Better quality than simple hash, reduces banding more effectively
+    float2 jitterSeed = rayDir.xz * 1000.0 + time * 10.0;
+    float jitter = frac(52.9829189 * frac(dot(jitterSeed, float2(0.06711056, 0.00583715))));
     float jitterOffset = jitter * baseStepSize;
 
     // Phase function
     float cosTheta = dot(rayDir, sunDir);
     float phase = cloudPhaseFunction(cosTheta);
 
-    // Ambient light (from sky)
-    float3 ambientColor = sunColor * 0.15;
+    // Time-of-day scaling for ambient to prevent bright clouds at night
+    float dayFactor = saturate(sunDir.y * 2.0 + 0.5);
+    float sunBrightness = dot(sunColor, float3(0.299, 0.587, 0.114));
+    float timeOfDayScale = max(0.02, dayFactor * saturate(sunBrightness * 0.5 + 0.5));
+
+    // Ambient light (from sky, scaled by time of day)
+    float3 ambientColor = sunColor * 0.15 * timeOfDayScale;
 
     // March through cloud layer (with jitter offset to reduce banding)
     float startT = tMin + jitterOffset;
@@ -476,6 +482,15 @@ CloudOutput renderVolumetricClouds(float3 rayOrigin, float3 rayDir, float3 sunDi
         if (currentT > tMax)
             break;
     }
+
+    // Apply distance fog to far clouds for smoother horizon blending
+    float fogDistance = output.depth;
+    float fogFactor = saturate(fogDistance / 6000.0);  // Fog starts at ~6000 blocks
+    fogFactor = fogFactor * fogFactor;  // Quadratic falloff for smoother transition
+
+    // Fade clouds toward sky color at distance
+    float3 fogColor = sunColor * timeOfDayScale * 0.5;  // Match approximate sky brightness
+    output.color = lerp(output.color, fogColor * (1.0 - output.transmittance), fogFactor);
 
     return output;
 }
