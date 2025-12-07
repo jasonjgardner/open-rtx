@@ -79,6 +79,22 @@ void FinalCombine(
 #if ENABLE_POST_PROCESSING
 
     // ---------------------------
+    // Bloom (in HDR before tonemapping)
+    // ---------------------------
+#if ENABLE_BLOOM
+    {
+        // Extract and add bloom contribution
+        float3 bloom = computeBloomSinglePass(color, uv, float2(g_view.renderResolution));
+
+        // Apply anamorphic effect if enabled
+        bloom = computeAnamorphicBloom(bloom, uv);
+
+        // Add bloom to color
+        color += bloom;
+    }
+#endif
+
+    // ---------------------------
     // Film Grain
     // ---------------------------
 #if ENABLE_FILM_GRAIN

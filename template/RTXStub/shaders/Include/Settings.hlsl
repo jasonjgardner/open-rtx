@@ -913,7 +913,9 @@
 // 3: Reinhard
 // 4: Uchimura
 // 5: AgX
-// 6: None (linear)
+// 6: GTA V (cinematic filmic)
+// 7: Watch Dogs (orange/teal cinematic)
+// 8: None (linear)
 #ifndef TONEMAPPING_TYPE
 #define TONEMAPPING_TYPE 1  // ACES default
 #endif
@@ -925,6 +927,64 @@
 
 #ifndef ACES_OUTPUT_SCALE
 #define ACES_OUTPUT_SCALE 1.0
+#endif
+
+// GTA V tonemapper settings
+#ifndef GTAV_HIGHLIGHT_DESAT
+#define GTAV_HIGHLIGHT_DESAT 0.3  // Highlight desaturation (film look)
+#endif
+
+// Watch Dogs tonemapper settings
+#ifndef WATCHDOGS_HIGHLIGHT_DESAT
+#define WATCHDOGS_HIGHLIGHT_DESAT 0.4  // Stronger highlight desaturation
+#endif
+
+#ifndef WATCHDOGS_CONTRAST
+#define WATCHDOGS_CONTRAST 1.05  // Extra contrast punch
+#endif
+
+// =============================================================================
+// BLOOM SETTINGS
+// =============================================================================
+
+// Enable bloom effect
+#ifndef ENABLE_BLOOM
+#define ENABLE_BLOOM 1
+#endif
+
+// Brightness threshold for bloom
+#ifndef BLOOM_THRESHOLD
+#define BLOOM_THRESHOLD 0.8
+#endif
+
+// Soft knee for smooth threshold transition
+#ifndef BLOOM_KNEE
+#define BLOOM_KNEE 0.5
+#endif
+
+// Bloom intensity
+#ifndef BLOOM_INTENSITY
+#define BLOOM_INTENSITY 0.3
+#endif
+
+// Bloom color tint (warm for cinematic look)
+#ifndef BLOOM_TINT
+#define BLOOM_TINT float3(1.1, 1.0, 0.9)
+#endif
+
+// Enable anamorphic bloom (horizontal streaks)
+#ifndef ENABLE_ANAMORPHIC_BLOOM
+#define ENABLE_ANAMORPHIC_BLOOM 0
+#endif
+
+// Anamorphic streak intensity
+#ifndef ANAMORPHIC_INTENSITY
+#define ANAMORPHIC_INTENSITY 0.5
+#endif
+
+// Anamorphic spread (higher = tighter streaks)
+#ifndef ANAMORPHIC_SPREAD
+#define ANAMORPHIC_SPREAD 3.0
 #endif
 
 // Exposure

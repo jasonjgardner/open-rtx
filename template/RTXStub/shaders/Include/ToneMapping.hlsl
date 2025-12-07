@@ -326,6 +326,162 @@ float3 tonemapAgX(float3 color)
 }
 
 // =============================================================================
+// GTA V / WATCH DOGS STYLE CINEMATIC TONEMAPPING
+// =============================================================================
+
+// GTA V uses a modified filmic curve with specific characteristics:
+// - Strong highlight compression
+// - Slight desaturation in highlights (film-like)
+// - Rich blacks without crushing
+// - Cinematic color response
+
+float3 tonemapGTAV(float3 color)
+{
+    // Pre-desaturate very bright areas (film highlight rolloff)
+    float lum = luminance(color);
+    float highlightDesat = smoothstep(1.0, 4.0, lum);
+    color = lerp(color, lum, highlightDesat * GTAV_HIGHLIGHT_DESAT);
+
+    // GTA V style filmic curve parameters
+    float A = 0.22;  // Shoulder strength
+    float B = 0.30;  // Linear strength
+    float C = 0.10;  // Linear angle
+    float D = 0.20;  // Toe strength
+    float E = 0.01;  // Toe numerator
+    float F = 0.30;  // Toe denominator
+    float W = 11.2;  // Linear white point
+
+    // Apply curve with slight modification for GTA look
+    float3 curr = ((color * (A * color + C * B) + D * E) / (color * (A * color + B) + D * F)) - E / F;
+    float3 whiteScale = 1.0 / (((W * (A * W + C * B) + D * E) / (W * (A * W + B) + D * F)) - E / F);
+    color = curr * whiteScale;
+
+    // Subtle S-curve for extra contrast (GTA style)
+    color = color * color * (3.0 - 2.0 * color);  // Smoothstep-like contrast
+
+    // Slight warm tint in shadows, cool in highlights (cinematic color grade)
+    float3 shadowTint = float3(1.02, 1.0, 0.98);
+    float3 highlightTint = float3(0.98, 0.99, 1.02);
+    float lumOut = luminance(color);
+    float3 tint = lerp(shadowTint, highlightTint, lumOut);
+    color *= tint;
+
+    return saturate(color);
+}
+
+// Watch Dogs style - slightly more contrasty with cyan/orange push
+float3 tonemapWatchDogs(float3 color)
+{
+    // Strong highlight compression
+    float lum = luminance(color);
+    float highlightDesat = smoothstep(0.8, 3.0, lum);
+    color = lerp(color, lum, highlightDesat * WATCHDOGS_HIGHLIGHT_DESAT);
+
+    // Modified Uncharted 2 curve with Watch Dogs parameters
+    float A = 0.15;  // Shoulder
+    float B = 0.50;  // Linear
+    float C = 0.10;  // Linear angle
+    float D = 0.20;  // Toe
+    float E = 0.02;  // Toe numerator
+    float F = 0.30;  // Toe denominator
+    float W = 11.2;
+
+    float3 curr = ((color * (A * color + C * B) + D * E) / (color * (A * color + B) + D * F)) - E / F;
+    float3 whiteScale = 1.0 / (((W * (A * W + C * B) + D * E) / (W * (A * W + B) + D * F)) - E / F);
+    color = curr * whiteScale;
+
+    // Watch Dogs has a distinctive orange/teal color grade
+    float lumOut = luminance(color);
+
+    // Push shadows towards teal, highlights towards orange
+    float3 shadowColor = float3(0.9, 1.0, 1.1);   // Teal shadows
+    float3 midColor = float3(1.0, 1.0, 1.0);       // Neutral mids
+    float3 highlightColor = float3(1.1, 1.0, 0.9); // Warm highlights
+
+    float3 tint;
+    if (lumOut < 0.5)
+        tint = lerp(shadowColor, midColor, lumOut * 2.0);
+    else
+        tint = lerp(midColor, highlightColor, (lumOut - 0.5) * 2.0);
+
+    color *= tint;
+
+    // Extra contrast punch
+    color = pow(color, WATCHDOGS_CONTRAST);
+
+    return saturate(color);
+}
+
+// =============================================================================
+// BLOOM
+// =============================================================================
+
+// Extract bloom threshold - isolate bright areas
+float3 extractBloomThreshold(float3 color, float threshold, float knee)
+{
+    float brightness = max(color.r, max(color.g, color.b));
+    float soft = brightness - threshold + knee;
+    soft = clamp(soft, 0.0, 2.0 * knee);
+    soft = soft * soft / (4.0 * knee + 0.00001);
+    float contribution = max(soft, brightness - threshold) / max(brightness, 0.00001);
+    return color * contribution;
+}
+
+// Kawase blur kernel (efficient bloom blur)
+float3 kawaseBlur(float3 color, float2 texelSize, float iteration)
+{
+    float2 offset = (iteration + 0.5) * texelSize;
+
+    // This would sample a texture in a real implementation
+    // For inline use, we return a simulated blur contribution
+    return color * 0.25;  // Simplified - actual implementation needs texture sampling
+}
+
+// Compute bloom contribution for a pixel
+// Note: Full bloom requires multi-pass rendering. This is a single-pass approximation.
+float3 computeBloomSinglePass(float3 hdrColor, float2 uv, float2 resolution)
+{
+#if !ENABLE_BLOOM
+    return 0.0;
+#endif
+
+    // Extract bright areas
+    float3 brightPass = extractBloomThreshold(hdrColor, BLOOM_THRESHOLD, BLOOM_KNEE);
+
+    // In a real implementation, this would be a separable Gaussian blur
+    // across multiple passes. For single-pass, we approximate with a
+    // simple glow falloff based on brightness.
+    float brightness = luminance(brightPass);
+    float3 bloom = brightPass * BLOOM_INTENSITY;
+
+    // Simulate blur spread by softening
+    bloom = bloom / (1.0 + brightness * 0.5);
+
+    // Apply bloom color tint (slightly warm for cinematic look)
+    bloom *= lerp(float3(1.0, 1.0, 1.0), BLOOM_TINT, 0.3);
+
+    return bloom;
+}
+
+// Lens dirt/anamorphic bloom effect
+float3 computeAnamorphicBloom(float3 bloom, float2 uv)
+{
+#if !ENABLE_ANAMORPHIC_BLOOM
+    return bloom;
+#endif
+
+    // Stretch bloom horizontally for anamorphic lens effect
+    float2 center = uv - 0.5;
+    float horizontal = abs(center.x);
+    float streak = exp(-horizontal * ANAMORPHIC_SPREAD);
+
+    // Add horizontal streaks
+    bloom += bloom * streak * ANAMORPHIC_INTENSITY;
+
+    return bloom;
+}
+
+// =============================================================================
 // MAIN TONEMAPPING FUNCTION
 // =============================================================================
 
@@ -343,6 +499,10 @@ float3 tonemap(float3 color)
     return tonemapUchimura(color);
 #elif TONEMAPPING_TYPE == 5
     return tonemapAgX(color);
+#elif TONEMAPPING_TYPE == 6
+    return tonemapGTAV(color);
+#elif TONEMAPPING_TYPE == 7
+    return tonemapWatchDogs(color);
 #else
     return saturate(color); // No tonemapping
 #endif
