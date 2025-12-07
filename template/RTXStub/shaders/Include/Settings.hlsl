@@ -151,6 +151,35 @@
 #endif
 
 // =============================================================================
+// EMISSIVE GI SETTINGS (Light bouncing from glowing blocks)
+// =============================================================================
+
+// Enable raytraced emissive global illumination
+#ifndef ENABLE_EMISSIVE_GI
+#define ENABLE_EMISSIVE_GI 1
+#endif
+
+// Number of samples for emissive GI (higher = better quality, slower)
+#ifndef EMISSIVE_GI_SAMPLES
+#define EMISSIVE_GI_SAMPLES 4
+#endif
+
+// Maximum range for emissive light sampling (in blocks)
+#ifndef EMISSIVE_GI_RANGE
+#define EMISSIVE_GI_RANGE 32.0
+#endif
+
+// Falloff rate for emissive light (higher = faster falloff)
+#ifndef EMISSIVE_GI_FALLOFF
+#define EMISSIVE_GI_FALLOFF 0.05
+#endif
+
+// Strength multiplier for emissive GI
+#ifndef EMISSIVE_GI_STRENGTH
+#define EMISSIVE_GI_STRENGTH 1.5
+#endif
+
+// =============================================================================
 // BRDF SETTINGS
 // =============================================================================
 

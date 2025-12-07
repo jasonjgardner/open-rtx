@@ -602,6 +602,98 @@ float3 getSoftShadowDirection(float3 lightDir, float2 xi, float softness)
 }
 
 // =============================================================================
+// EMISSIVE LIGHT SAMPLING (Global Illumination from emissive blocks)
+// =============================================================================
+
+// Sample indirect light from emissive surfaces
+float3 sampleEmissiveLight(float3 origin, float3 normal, float2 pixelCoord, OpenRTXContext ctx, int numSamples)
+{
+#if !ENABLE_EMISSIVE_GI
+    return 0.0;
+#endif
+
+    float3 emissiveLight = 0.0;
+
+    // Build tangent space for hemisphere sampling
+    float3 tangent = normalize(cross(normal, abs(normal.y) < 0.999 ? float3(0, 1, 0) : float3(1, 0, 0)));
+    float3 bitangent = cross(normal, tangent);
+
+    float totalWeight = 0.0;
+
+    [loop]
+    for (int i = 0; i < numSamples; i++)
+    {
+        // Generate random direction in hemisphere (cosine weighted)
+        float2 xi = float2(
+            frac(sin(dot(pixelCoord + float2(i * 17.0, g_view.time * 50.0), float2(12.9898, 78.233))) * 43758.5453),
+            frac(sin(dot(pixelCoord + float2(g_view.time * 50.0, i * 31.0), float2(127.1, 311.7))) * 43758.5453)
+        );
+
+        // Cosine-weighted hemisphere sampling
+        float r = sqrt(xi.x);
+        float theta = 2.0 * kPi * xi.y;
+        float x = r * cos(theta);
+        float y = r * sin(theta);
+        float z = sqrt(max(0.0, 1.0 - xi.x));
+
+        float3 sampleDir = normalize(x * tangent + y * bitangent + z * normal);
+
+        // Trace ray
+        RayQuery<RAY_FLAG_NONE> emissiveQuery;
+        RayDesc emissiveRay;
+        emissiveRay.Origin = origin + normal * 0.01;
+        emissiveRay.Direction = sampleDir;
+        emissiveRay.TMin = 0.0;
+        emissiveRay.TMax = EMISSIVE_GI_RANGE;
+
+        emissiveQuery.TraceRayInline(SceneBVH, RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0xff, emissiveRay);
+
+        while (emissiveQuery.Proceed())
+        {
+            HitInfo hitInfo = GetCandidateHitInfo(emissiveQuery);
+            if (AlphaTestHitLogic(hitInfo))
+            {
+                emissiveQuery.CommitNonOpaqueTriangleHit();
+            }
+        }
+
+        if (emissiveQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+        {
+            HitInfo hitInfo = GetCommittedHitInfo(emissiveQuery);
+            ObjectInstance objectInstance = objectInstances[hitInfo.objectInstanceIndex];
+            GeometryInfo geometryInfo = GetGeometryInfo(hitInfo, objectInstance);
+            SurfaceInfo surfaceInfo = MaterialVanilla(hitInfo, geometryInfo, objectInstance);
+
+            // If we hit an emissive surface, accumulate its light
+            if (surfaceInfo.emissive > 0.01)
+            {
+                float distance = hitInfo.rayT;
+                float falloff = 1.0 / (1.0 + distance * distance * EMISSIVE_GI_FALLOFF);
+
+                // Weight by emissive strength and distance
+                float3 emitted = surfaceInfo.color * surfaceInfo.emissive * EMISSIVE_INTENSITY;
+                emissiveLight += emitted * falloff * EMISSIVE_GI_STRENGTH;
+                totalWeight += 1.0;
+            }
+            else
+            {
+                // Non-emissive surface - add small ambient bounce
+                float3 bounceLight = surfaceInfo.color * ctx.constantAmbient * 0.2;
+                emissiveLight += bounceLight;
+                totalWeight += 1.0;
+            }
+        }
+    }
+
+    if (totalWeight > 0.0)
+    {
+        emissiveLight /= totalWeight;
+    }
+
+    return emissiveLight;
+}
+
+// =============================================================================
 // REFLECTION RAY TRACING
 // =============================================================================
 
@@ -975,6 +1067,26 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
         {
             light += reflectionContrib * (1.0 - surface.roughness);
         }
+    }
+#endif
+
+    // =================================================================
+    // EMISSIVE GI (Light from glowing blocks illuminating surroundings)
+    // =================================================================
+#if OPENRTX_ENABLED && ENABLE_EMISSIVE_GI
+    // Only apply emissive GI to non-emissive opaque surfaces
+    if (isOpaque && surfaceInfo.emissive < 0.1)
+    {
+        float3 emissiveGI = sampleEmissiveLight(
+            surfaceInfo.position,
+            surfaceInfo.normal,
+            pixelCoord,
+            ctx,
+            EMISSIVE_GI_SAMPLES
+        );
+
+        // Add emissive light contribution to diffuse surfaces
+        light += surfaceInfo.color * emissiveGI;
     }
 #endif
 
