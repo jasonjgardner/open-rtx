@@ -23,7 +23,7 @@ on:
 env:
   VANILLA_BASE_URL: https://cdn.bedrock.graphics/vanilla/v23
   VANILLA_VERSION: v23
-  DXC_VERSION: "1.8.2505.32"
+  DXC_VERSION: "1.8.2505.1"
 
 jobs:
   build:
@@ -81,11 +81,12 @@ jobs:
         if: steps.cache-dxc.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          Write-Host "Downloading DXC..."
-          Invoke-WebRequest -Uri "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v${{ env.DXC_VERSION }}/dxc_2025_05_32.zip" -OutFile "dxc.zip"
+          Write-Host "Downloading DXC v${{ env.DXC_VERSION }}..."
+          Invoke-WebRequest -Uri "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v${{ env.DXC_VERSION }}/dxc_2025_07_14.zip" -OutFile "dxc.zip"
           Expand-Archive -Path "dxc.zip" -DestinationPath "dxc" -Force
           Remove-Item "dxc.zip"
-          Get-ChildItem dxc/ -Recurse | Where-Object { $_.Name -like "dxc*" }
+          Write-Host "DXC contents:"
+          Get-ChildItem dxc/ -Recurse | Where-Object { $_.Name -match "dxc|dxcompiler|dxil" }
 
       - name: Cache shaderc
         id: cache-shaderc
@@ -111,9 +112,11 @@ jobs:
         shell: pwsh
         run: |
           Write-Host "=== DXC ==="
-          $dxcPath = Get-ChildItem -Path dxc -Recurse -Filter "dxc.exe" | Select-Object -First 1
-          Write-Host "DXC path: $($dxcPath.FullName)"
-          & $dxcPath.FullName --version
+          $dxcPath = "$PWD\dxc\bin\x64\dxc.exe"
+          Write-Host "DXC path: $dxcPath"
+          Write-Host "DXC bin/x64 contents:"
+          Get-ChildItem "$PWD\dxc\bin\x64\"
+          & $dxcPath --version
           Write-Host ""
           Write-Host "=== Shaderc ==="
           Write-Host "Shaderc path: $PWD\shaderc.exe"
@@ -131,8 +134,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path build
 
-          # Find DXC path
-          $dxcPath = (Get-ChildItem -Path dxc -Recurse -Filter "dxc.exe" | Select-Object -First 1).FullName
+          # Set compiler paths
+          $dxcPath = "$PWD\dxc\bin\x64\dxc.exe"
           $shadercPath = "$PWD\shaderc.exe"
 
           Write-Host "=== LAZURITE BUILD ===" | Tee-Object -FilePath build/build.log
