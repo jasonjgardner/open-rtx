@@ -396,7 +396,7 @@ CloudOutput renderVolumetricClouds(float3 rayOrigin, float3 rayDir, float3 sunDi
     float distanceLOD = calculateLOD(tMin, 8000.0);
 
     // Reduce steps at distance for performance
-    int numSteps = int(lerp(float(CLOUD_MARCH_STEPS), float(CLOUD_MARCH_STEPS / 2), distanceLOD));
+    int numSteps = int(lerp(float(CLOUD_MARCH_STEPS), float(CLOUD_MARCH_STEPS) * 0.5, distanceLOD));
     float baseStepSize = rayLength / float(numSteps);
 
     // Phase function
@@ -430,7 +430,7 @@ CloudOutput renderVolumetricClouds(float3 rayOrigin, float3 rayDir, float3 sunDi
                 output.depth = currentT;
 
             // Light sampling with LOD - reduce steps at distance
-            int lightSteps = int(lerp(float(CLOUD_LIGHT_MARCH_STEPS), float(max(2, CLOUD_LIGHT_MARCH_STEPS / 2)), distanceLOD));
+            int lightSteps = int(lerp(float(CLOUD_LIGHT_MARCH_STEPS), max(2.0, float(CLOUD_LIGHT_MARCH_STEPS) * 0.5), distanceLOD));
             float lightTransmittance = sampleLightTransmittance(currentPos, sunDir, time, lightSteps);
 
             // Beer-Powder for scattered light
