@@ -297,17 +297,26 @@ float3 traceReflection(float3 origin, float3 viewDir, float3 normal, float rough
     float3 reflectionColor = 0.0;
 
 #if ENABLE_RAYTRACED_REFLECTIONS
+    // Calculate distance for LOD
+    float distanceFromCamera = length(origin - ctx.viewOrigin);
+    float distanceLOD = saturate(distanceFromCamera / 256.0);  // LOD starts at ~256 blocks
+
     // Skip if too rough
     float effectiveRoughness = max(roughness - REFLECTION_ROUGHNESS_BIAS, MIN_ROUGHNESS);
-    if (effectiveRoughness > REFLECTION_MAX_ROUGHNESS || bounceDepth >= REFLECTION_MAX_BOUNCES)
+
+    // Increase roughness threshold at distance (skip more reflections far away)
+    float adjustedMaxRoughness = lerp(REFLECTION_MAX_ROUGHNESS, REFLECTION_MAX_ROUGHNESS * 0.5, distanceLOD);
+
+    if (effectiveRoughness > adjustedMaxRoughness || bounceDepth >= REFLECTION_MAX_BOUNCES)
     {
-        // Fall back to sky reflection for rough surfaces
+        // Fall back to sky reflection for rough/distant surfaces
         float3 reflectDir = reflect(viewDir, normal);
         return renderSkyWithClouds(reflectDir, ctx) * 0.1;
     }
 
-    // Determine number of samples based on roughness (more samples for rougher surfaces)
-    int numSamples = REFLECTION_SAMPLES;
+    // Determine number of samples - reduce at distance for performance
+    int maxSamples = int(lerp(float(REFLECTION_SAMPLES), 1.0, distanceLOD));
+    int numSamples = maxSamples;
     if (effectiveRoughness < 0.05)
     {
         numSamples = 1;  // Mirror-like surfaces need only one sample

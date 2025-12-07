@@ -183,24 +183,44 @@ float remap(float value, float low1, float high1, float low2, float high2)
     return low2 + (value - low1) * (high2 - low2) / (high1 - low1);
 }
 
-// Sample cloud density at a point
-float sampleCloudDensity(float3 worldPos, float time, bool detailed)
+// =============================================================================
+// DISTANCE-BASED LOD
+// =============================================================================
+
+// Calculate LOD level based on distance (0 = close/high detail, 1 = far/low detail)
+float calculateLOD(float distance, float maxDistance)
+{
+    return saturate(distance / maxDistance);
+}
+
+// Get octave count based on LOD
+int getOctavesForLOD(float lod, int maxOctaves, int minOctaves)
+{
+    return int(lerp(float(maxOctaves), float(minOctaves), lod));
+}
+
+// Sample cloud density at a point with distance-based LOD
+float sampleCloudDensityLOD(float3 worldPos, float time, bool detailed, float distanceFromCamera)
 {
     // Convert world position to cloud space
     float cloudThickness = CLOUD_MAX_HEIGHT - CLOUD_MIN_HEIGHT;
     float heightFraction = (worldPos.y - CLOUD_MIN_HEIGHT) / cloudThickness;
 
-    // Check bounds
+    // Early exit: check bounds first
     if (heightFraction < 0.0 || heightFraction > 1.0)
         return 0.0;
+
+    // Calculate LOD based on distance
+    float lod = calculateLOD(distanceFromCamera, 10000.0);
 
     // Wind animation
     float2 windOffset = CLOUD_WIND_DIRECTION * CLOUD_WIND_SPEED * time;
     float3 animatedPos = worldPos + float3(windOffset.x, 0.0, windOffset.y);
 
-    // Base cloud shape (large scale)
+    // Base cloud shape - reduce octaves at distance
     float3 baseCoords = animatedPos * 0.0003;
-    float baseNoise = fbm(baseCoords, 4);
+    int baseOctaves = getOctavesForLOD(lod, 4, 2);
+    float baseNoise = fbm(baseCoords, baseOctaves);
 
     // Coverage map (simplified - in production would use weather texture)
     float2 coverageCoords = animatedPos.xz * 0.00005 + time * 0.001;
@@ -222,13 +242,14 @@ float sampleCloudDensity(float3 worldPos, float time, bool detailed)
     if (baseDensity < 0.01)
         return 0.0;
 
-    // Detail erosion (only when needed)
-    if (detailed && baseDensity > 0.01)
+    // Detail erosion - skip for distant clouds or light samples
+    if (detailed && baseDensity > 0.01 && lod < 0.7)
     {
         float3 detailCoords = animatedPos * 0.003;
 
-        // High frequency erosion
-        float detailNoise = worleyFBM(detailCoords, 3);
+        // Reduce detail octaves at distance
+        int detailOctaves = getOctavesForLOD(lod, 3, 1);
+        float detailNoise = worleyFBM(detailCoords, detailOctaves);
         float detailErosion = detailNoise * CLOUD_DETAIL_STRENGTH;
 
         // Height-based detail
@@ -239,6 +260,12 @@ float sampleCloudDensity(float3 worldPos, float time, bool detailed)
     }
 
     return baseDensity * CLOUD_DENSITY;
+}
+
+// Original function for backwards compatibility (uses default LOD)
+float sampleCloudDensity(float3 worldPos, float time, bool detailed)
+{
+    return sampleCloudDensityLOD(worldPos, time, detailed, 0.0);
 }
 
 // =============================================================================
@@ -360,13 +387,16 @@ CloudOutput renderVolumetricClouds(float3 rayOrigin, float3 rayDir, float3 sunDi
     float tMin = intersection.x;
     float tMax = min(intersection.y, maxDistance);
 
-    // No intersection
+    // Early exit: no intersection
     if (tMax <= tMin)
         return output;
 
-    // Ray marching parameters
+    // Ray marching parameters with distance-based LOD
     float rayLength = tMax - tMin;
-    int numSteps = CLOUD_MARCH_STEPS;
+    float distanceLOD = calculateLOD(tMin, 8000.0);
+
+    // Reduce steps at distance for performance
+    int numSteps = int(lerp(float(CLOUD_MARCH_STEPS), float(CLOUD_MARCH_STEPS / 2), distanceLOD));
     float baseStepSize = rayLength / float(numSteps);
 
     // Phase function
@@ -379,15 +409,19 @@ CloudOutput renderVolumetricClouds(float3 rayOrigin, float3 rayDir, float3 sunDi
     // March through cloud layer
     float3 currentPos = rayOrigin + rayDir * tMin;
     float currentT = tMin;
-    float accumDensity = 0.0;
+    float accumulatedAlpha = 0.0;
 
-    for (int i = 0; i < numSteps && output.transmittance > 0.01; i++)
+    for (int i = 0; i < numSteps; i++)
     {
+        // Early exit: cloud is opaque enough
+        if (output.transmittance < 0.01 || accumulatedAlpha > 0.95)
+            break;
+
         // Adaptive step size based on density
         float stepSize = baseStepSize;
 
-        // Sample cloud density
-        float density = sampleCloudDensity(currentPos, time, true);
+        // Sample cloud density with distance-based LOD
+        float density = sampleCloudDensityLOD(currentPos, time, true, currentT);
 
         if (density > 0.001)
         {
@@ -395,8 +429,9 @@ CloudOutput renderVolumetricClouds(float3 rayOrigin, float3 rayDir, float3 sunDi
             if (output.depth >= maxDistance)
                 output.depth = currentT;
 
-            // Light sampling
-            float lightTransmittance = sampleLightTransmittance(currentPos, sunDir, time, CLOUD_LIGHT_MARCH_STEPS);
+            // Light sampling with LOD - reduce steps at distance
+            int lightSteps = int(lerp(float(CLOUD_LIGHT_MARCH_STEPS), float(max(2, CLOUD_LIGHT_MARCH_STEPS / 2)), distanceLOD));
+            float lightTransmittance = sampleLightTransmittance(currentPos, sunDir, time, lightSteps);
 
             // Beer-Powder for scattered light
             float scatterAmount = beerPowder(density * stepSize, cosTheta);
@@ -414,13 +449,16 @@ CloudOutput renderVolumetricClouds(float3 rayOrigin, float3 rayDir, float3 sunDi
             output.color += scatteredLight * output.transmittance;
             output.transmittance *= transmittance;
 
+            // Track accumulated alpha for early exit
+            accumulatedAlpha = 1.0 - output.transmittance;
+
             // Smaller steps in dense regions
             stepSize *= lerp(1.0, 0.5, density);
         }
         else
         {
-            // Larger steps in empty regions
-            stepSize *= 2.0;
+            // Larger steps in empty regions - more aggressive skip
+            stepSize *= 2.5;
         }
 
         // Advance
@@ -428,7 +466,7 @@ CloudOutput renderVolumetricClouds(float3 rayOrigin, float3 rayDir, float3 sunDi
         currentT += stepSize;
         currentPos += rayDir * stepSize;
 
-        // Check bounds
+        // Early exit: past cloud layer
         if (currentT > tMax)
             break;
     }
