@@ -122,7 +122,7 @@ float fbm(float3 p, int octaves)
     float amplitude = 0.5;
     float frequency = 1.0;
 
-    [unroll]
+    [loop]
     for (int i = 0; i < octaves; i++)
     {
         value += amplitude * valueNoise3D(p * frequency);
@@ -140,7 +140,7 @@ float worleyFBM(float3 p, int octaves)
     float amplitude = 0.5;
     float frequency = 1.0;
 
-    [unroll]
+    [loop]
     for (int i = 0; i < octaves; i++)
     {
         value += amplitude * (1.0 - worleyNoise3D(p * frequency));
@@ -316,7 +316,7 @@ float sampleLightTransmittance(float3 pos, float3 lightDir, float time, int numS
 
     float3 currentPos = pos;
 
-    [unroll]
+    [loop]
     for (int i = 0; i < numSamples; i++)
     {
         currentPos += lightDir * stepSize;
