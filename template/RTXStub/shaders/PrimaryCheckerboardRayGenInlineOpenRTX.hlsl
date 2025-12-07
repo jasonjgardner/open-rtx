@@ -1003,8 +1003,9 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
     {
         // Glass/transparent surface with IOR-based Fresnel
 #if ENABLE_GLASS_REFRACTION
-        // Check if this is a glass-like transparent surface (high alpha = more solid glass)
-        bool isGlassLike = surfaceInfo.alpha > 0.1;
+        // Check if this is a glass-like transparent surface (not water, not foliage)
+        // Glass typically has higher alpha and is not flagged as water
+        bool isGlassLike = !isWater && surfaceInfo.alpha > 0.3;
 
         if (isGlassLike)
         {

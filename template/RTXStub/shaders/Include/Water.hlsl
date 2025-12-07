@@ -309,12 +309,12 @@ float foamBubbles(float2 p, float time)
         for (int x = -1; x <= 1; x++)
         {
             float2 neighbor = float2(x, y);
-            float2 point = hashWater(i + neighbor) * 0.5 + 0.25;
+            float2 cellCenter = hashWater(i + neighbor) * 0.5 + 0.25;
 
             // Animate bubble positions slightly
-            point += 0.1 * sin(time * 2.0 + 6.2831 * hashWater(i + neighbor + 100.0));
+            cellCenter += 0.1 * sin(time * 2.0 + 6.2831 * hashWater(i + neighbor + 100.0));
 
-            float2 diff = neighbor + point - f;
+            float2 diff = neighbor + cellCenter - f;
             float dist = length(diff);
             minDist = min(minDist, dist);
         }
