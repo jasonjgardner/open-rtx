@@ -616,6 +616,58 @@
 #define WATER_SEDIMENT_AMOUNT 0.02
 #endif
 
+// =============================================================================
+// WATER BIOME PRESETS
+// =============================================================================
+// Set WATER_PRESET to use predefined water types. Set to 0 for custom values.
+// 0 = Custom (uses individual settings above)
+// 1 = Clear Ocean (tropical, very clear)
+// 2 = Coastal Ocean (moderate visibility)
+// 3 = River (greenish, moderate particles)
+// 4 = Swamp (murky, high organic matter)
+// 5 = Lake (clear, cold water)
+
+#ifndef WATER_PRESET
+#define WATER_PRESET 0
+#endif
+
+#if WATER_PRESET == 1  // Clear Ocean
+    #undef WATER_CDOM_AMOUNT
+    #undef WATER_CHLOROPHYLL_AMOUNT
+    #undef WATER_SEDIMENT_AMOUNT
+    #define WATER_CDOM_AMOUNT 0.02
+    #define WATER_CHLOROPHYLL_AMOUNT 0.01
+    #define WATER_SEDIMENT_AMOUNT 0.005
+#elif WATER_PRESET == 2  // Coastal Ocean
+    #undef WATER_CDOM_AMOUNT
+    #undef WATER_CHLOROPHYLL_AMOUNT
+    #undef WATER_SEDIMENT_AMOUNT
+    #define WATER_CDOM_AMOUNT 0.08
+    #define WATER_CHLOROPHYLL_AMOUNT 0.06
+    #define WATER_SEDIMENT_AMOUNT 0.03
+#elif WATER_PRESET == 3  // River
+    #undef WATER_CDOM_AMOUNT
+    #undef WATER_CHLOROPHYLL_AMOUNT
+    #undef WATER_SEDIMENT_AMOUNT
+    #define WATER_CDOM_AMOUNT 0.15
+    #define WATER_CHLOROPHYLL_AMOUNT 0.08
+    #define WATER_SEDIMENT_AMOUNT 0.06
+#elif WATER_PRESET == 4  // Swamp
+    #undef WATER_CDOM_AMOUNT
+    #undef WATER_CHLOROPHYLL_AMOUNT
+    #undef WATER_SEDIMENT_AMOUNT
+    #define WATER_CDOM_AMOUNT 0.4
+    #define WATER_CHLOROPHYLL_AMOUNT 0.2
+    #define WATER_SEDIMENT_AMOUNT 0.1
+#elif WATER_PRESET == 5  // Lake
+    #undef WATER_CDOM_AMOUNT
+    #undef WATER_CHLOROPHYLL_AMOUNT
+    #undef WATER_SEDIMENT_AMOUNT
+    #define WATER_CDOM_AMOUNT 0.05
+    #define WATER_CHLOROPHYLL_AMOUNT 0.03
+    #define WATER_SEDIMENT_AMOUNT 0.01
+#endif
+
 // Raindrop ripples
 #ifndef ENABLE_RAIN_RIPPLES
 #define ENABLE_RAIN_RIPPLES 1

@@ -279,20 +279,82 @@ float3 waterInscatter(float distance, float3 lightColor, float lightIntensity)
 // FOAM GENERATION
 // =============================================================================
 
+// Domain warped FBM for organic foam patterns
+float foamFBM(float2 p, float time)
+{
+    // Domain warping for more organic shapes
+    float2 q = float2(
+        waterFBM(p + float2(0.0, 0.0), 3),
+        waterFBM(p + float2(5.2, 1.3), 3)
+    );
+
+    float2 r = float2(
+        waterFBM(p + 4.0 * q + float2(1.7, 9.2) + time * 0.15, 3),
+        waterFBM(p + 4.0 * q + float2(8.3, 2.8) + time * 0.12, 3)
+    );
+
+    return waterFBM(p + 4.0 * r, 4);
+}
+
+// Voronoi-based foam bubbles
+float foamBubbles(float2 p, float time)
+{
+    float2 i = floor(p);
+    float2 f = frac(p);
+
+    float minDist = 1.0;
+
+    for (int y = -1; y <= 1; y++)
+    {
+        for (int x = -1; x <= 1; x++)
+        {
+            float2 neighbor = float2(x, y);
+            float2 point = hashWater(i + neighbor) * 0.5 + 0.25;
+
+            // Animate bubble positions slightly
+            point += 0.1 * sin(time * 2.0 + 6.2831 * hashWater(i + neighbor + 100.0));
+
+            float2 diff = neighbor + point - f;
+            float dist = length(diff);
+            minDist = min(minDist, dist);
+        }
+    }
+
+    return 1.0 - smoothstep(0.0, 0.4, minDist);
+}
+
 float calculateFoam(float2 pos, float time, float depth, float waveHeight)
 {
 #if ENABLE_WATER_FOAM
-    // Shoreline foam (based on depth)
+    // Shoreline foam (based on depth) with persistence
     float depthFoam = smoothstep(WATER_FOAM_THRESHOLD, 0.0, depth);
+    depthFoam = pow(depthFoam, 0.7);  // Softer falloff
 
-    // Wave crest foam (based on wave height)
-    float crestFoam = smoothstep(WATER_WAVE_AMPLITUDE * 0.5, WATER_WAVE_AMPLITUDE, waveHeight);
+    // Wave crest foam with Jacobian-like fold detection
+    float crestFoam = smoothstep(WATER_WAVE_AMPLITUDE * 0.4, WATER_WAVE_AMPLITUDE * 0.9, waveHeight);
 
-    // Noise for foam texture
-    float foamNoise = waterFBM(pos * 2.0 + time * 0.5, 4);
-    foamNoise = smoothstep(0.3, 0.7, foamNoise);
+    // Calculate wave steepness for breaking wave foam
+    float epsilon = 0.05;
+    float hLeft = getWaveHeight(pos + float2(-epsilon, 0.0), time);
+    float hRight = getWaveHeight(pos + float2(epsilon, 0.0), time);
+    float slope = abs(hRight - hLeft) / (2.0 * epsilon);
+    float breakingFoam = smoothstep(0.3, 0.8, slope);
 
-    float foam = max(depthFoam, crestFoam) * foamNoise * WATER_FOAM_INTENSITY;
+    // Domain-warped FBM for organic foam texture
+    float foamPattern = foamFBM(pos * 1.5, time);
+    foamPattern = smoothstep(0.35, 0.65, foamPattern);
+
+    // Add bubble detail at shorelines
+    float bubbles = foamBubbles(pos * 8.0, time) * depthFoam;
+
+    // Combine foam types
+    float baseFoam = max(max(depthFoam, crestFoam), breakingFoam * 0.7);
+    float foam = baseFoam * foamPattern * WATER_FOAM_INTENSITY;
+    foam += bubbles * 0.3 * WATER_FOAM_INTENSITY;
+
+    // Foam lifetime - older foam fades
+    float foamAge = frac(time * 0.1 + hashWater(floor(pos)));
+    foam *= lerp(0.5, 1.0, 1.0 - foamAge * depthFoam);
 
     return saturate(foam);
 #else

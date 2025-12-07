@@ -92,6 +92,48 @@ struct ShadowResult
 // GLASS REFRACTION HELPERS
 // =============================================================================
 
+// Wavelength-dependent IOR using Cauchy's equation for dispersion
+// Returns IOR for red, green, blue wavelengths
+float3 getCauchyIOR(float baseIOR, float dispersionStrength)
+{
+    // Cauchy coefficients approximation
+    // n(λ) = A + B/λ² where λ in micrometers
+    // Red ~0.65μm, Green ~0.55μm, Blue ~0.45μm
+    float A = baseIOR - dispersionStrength * 0.5;
+    float B = dispersionStrength * 0.01;
+
+    float3 wavelengths = float3(0.65, 0.55, 0.45);  // RGB wavelengths in μm
+    float3 wavelengthsSq = wavelengths * wavelengths;
+
+    return A + B / wavelengthsSq;
+}
+
+// Refract with specific IOR (for dispersion)
+float3 refractWithIOR(float3 incident, float3 normal, float ior, out bool tir)
+{
+    float eta = 1.0 / ior;
+    float cosI = -dot(incident, normal);
+
+    if (cosI < 0.0)
+    {
+        normal = -normal;
+        cosI = -cosI;
+        eta = ior;
+    }
+
+    float sinT2 = eta * eta * (1.0 - cosI * cosI);
+
+    if (sinT2 > 1.0)
+    {
+        tir = true;
+        return reflect(incident, normal);
+    }
+
+    tir = false;
+    float cosT = sqrt(1.0 - sinT2);
+    return eta * incident + (eta * cosI - cosT) * normal;
+}
+
 // Calculate Fresnel reflectance for dielectric (glass) at given angle
 float glassFresnelReflectance(float cosTheta, float ior)
 {
@@ -232,6 +274,197 @@ float3 traceGlassRefraction(float3 origin, float3 direction, float3 normal,
     }
 
     return accumulatedColor;
+}
+
+// =============================================================================
+// CHROMATIC DISPERSION AND FROSTED GLASS
+// =============================================================================
+
+// Generate importance-sampled direction for rough glass
+float3 sampleFrostedDirection(float3 direction, float3 normal, float roughness, float2 randomSeed)
+{
+    if (roughness < 0.001)
+        return direction;
+
+    // GGX-like sampling for frosted glass
+    float2 xi = float2(
+        frac(sin(dot(randomSeed, float2(12.9898, 78.233))) * 43758.5453),
+        frac(sin(dot(randomSeed * 1.5, float2(127.1, 311.7))) * 43758.5453)
+    );
+
+    float a = roughness * roughness;
+    float theta = atan(a * sqrt(xi.x) / sqrt(1.0 - xi.x));
+    float phi = 2.0 * 3.14159 * xi.y;
+
+    // Microfacet normal in tangent space
+    float3 H_tangent = float3(
+        sin(theta) * cos(phi),
+        sin(theta) * sin(phi),
+        cos(theta)
+    );
+
+    // Build tangent space around refracted direction
+    float3 up = abs(direction.z) < 0.999 ? float3(0, 0, 1) : float3(1, 0, 0);
+    float3 tangent = normalize(cross(up, direction));
+    float3 bitangent = cross(direction, tangent);
+
+    // Transform to world space and blend with original direction
+    float3 scatteredDir = normalize(
+        H_tangent.x * tangent +
+        H_tangent.y * bitangent +
+        H_tangent.z * direction
+    );
+
+    return scatteredDir;
+}
+
+// Trace glass with chromatic dispersion (traces R, G, B separately)
+float3 traceGlassWithDispersion(float3 origin, float3 direction, float3 normal,
+                                 float3 glassColor, float glassAlpha, OpenRTXContext ctx,
+                                 int maxBounces, float roughness, float2 pixelCoord)
+{
+#if !ENABLE_GLASS_REFRACTION
+    return 0.0;
+#endif
+
+#if ENABLE_GLASS_DISPERSION
+    // Get wavelength-dependent IOR
+    float3 iorRGB = getCauchyIOR(GLASS_IOR, GLASS_DISPERSION_STRENGTH);
+
+    float3 resultRGB = 0.0;
+
+    // Trace each wavelength separately
+    // Red channel
+    {
+        bool tirR;
+        float3 refractDirR = refractWithIOR(direction, normal, iorRGB.r, tirR);
+        if (roughness > 0.001)
+            refractDirR = sampleFrostedDirection(refractDirR, normal, roughness, pixelCoord + float2(0.0, 0.0));
+
+        if (!tirR)
+        {
+            float3 colorR = traceGlassRefraction(origin, refractDirR, normal, glassColor, glassAlpha, ctx, maxBounces);
+            resultRGB.r = colorR.r;
+        }
+    }
+
+    // Green channel
+    {
+        bool tirG;
+        float3 refractDirG = refractWithIOR(direction, normal, iorRGB.g, tirG);
+        if (roughness > 0.001)
+            refractDirG = sampleFrostedDirection(refractDirG, normal, roughness, pixelCoord + float2(0.33, 0.0));
+
+        if (!tirG)
+        {
+            float3 colorG = traceGlassRefraction(origin, refractDirG, normal, glassColor, glassAlpha, ctx, maxBounces);
+            resultRGB.g = colorG.g;
+        }
+    }
+
+    // Blue channel
+    {
+        bool tirB;
+        float3 refractDirB = refractWithIOR(direction, normal, iorRGB.b, tirB);
+        if (roughness > 0.001)
+            refractDirB = sampleFrostedDirection(refractDirB, normal, roughness, pixelCoord + float2(0.66, 0.0));
+
+        if (!tirB)
+        {
+            float3 colorB = traceGlassRefraction(origin, refractDirB, normal, glassColor, glassAlpha, ctx, maxBounces);
+            resultRGB.b = colorB.b;
+        }
+    }
+
+    return resultRGB;
+#else
+    // No dispersion - use standard refraction with optional roughness
+    bool tir;
+    float3 refractDir = glassRefract(direction, normal, GLASS_IOR, tir);
+
+    if (roughness > 0.001)
+        refractDir = sampleFrostedDirection(refractDir, normal, roughness, pixelCoord);
+
+    if (tir)
+        return 0.0;
+
+    return traceGlassRefraction(origin, refractDir, normal, glassColor, glassAlpha, ctx, maxBounces);
+#endif
+}
+
+// =============================================================================
+// MEDIUM TRACKING FOR RAY TRANSITIONS
+// =============================================================================
+
+// Medium types for IOR tracking
+#define MEDIUM_AIR   0
+#define MEDIUM_WATER 1
+#define MEDIUM_GLASS 2
+
+// Get IOR for medium transition
+float getMediumIOR(int fromMedium, int toMedium)
+{
+    // IOR values
+    static const float IOR_AIR = 1.0;
+    static const float IOR_WATER = WATER_IOR;
+    static const float IOR_GLASS = GLASS_IOR;
+
+    float fromIOR = IOR_AIR;
+    float toIOR = IOR_AIR;
+
+    if (fromMedium == MEDIUM_WATER) fromIOR = IOR_WATER;
+    else if (fromMedium == MEDIUM_GLASS) fromIOR = IOR_GLASS;
+
+    if (toMedium == MEDIUM_WATER) toIOR = IOR_WATER;
+    else if (toMedium == MEDIUM_GLASS) toIOR = IOR_GLASS;
+
+    return toIOR / fromIOR;
+}
+
+// Refract ray through medium boundary
+float3 refractMediumBoundary(float3 incident, float3 normal, int fromMedium, int toMedium, out bool tir)
+{
+    float relativeIOR = getMediumIOR(fromMedium, toMedium);
+
+    float eta = 1.0 / relativeIOR;
+    float cosI = -dot(incident, normal);
+
+    // Handle backface
+    if (cosI < 0.0)
+    {
+        normal = -normal;
+        cosI = -cosI;
+        eta = relativeIOR;
+    }
+
+    float sinT2 = eta * eta * (1.0 - cosI * cosI);
+
+    if (sinT2 > 1.0)
+    {
+        tir = true;
+        return reflect(incident, normal);
+    }
+
+    tir = false;
+    float cosT = sqrt(1.0 - sinT2);
+    return eta * incident + (eta * cosI - cosT) * normal;
+}
+
+// Fresnel for medium transition
+float fresnelMediumBoundary(float cosTheta, int fromMedium, int toMedium)
+{
+    float relativeIOR = getMediumIOR(fromMedium, toMedium);
+    float eta = 1.0 / relativeIOR;
+    float sinThetaTSq = eta * eta * (1.0 - cosTheta * cosTheta);
+
+    if (sinThetaTSq > 1.0)
+        return 1.0;
+
+    float cosThetaT = sqrt(max(0.0, 1.0 - sinThetaTSq));
+    float rs = (eta * cosTheta - cosThetaT) / (eta * cosTheta + cosThetaT);
+    float rp = (cosTheta - eta * cosThetaT) / (cosTheta + eta * cosThetaT);
+
+    return (rs * rs + rp * rp) * 0.5;
 }
 
 // Trace shadow ray with color transmission through translucent surfaces
@@ -787,9 +1020,9 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
             float reflectAmount = fresnel * surfaceInfo.alpha;
             float transmitAmount = (1.0 - fresnel) * (1.0 - surfaceInfo.alpha * 0.5);
 
-            // Calculate refracted ray direction
+            // Check for total internal reflection with base IOR
             bool tir;
-            float3 refractDir = glassRefract(rayState.rayDesc.Direction, N, GLASS_IOR, tir);
+            float3 testDir = glassRefract(rayState.rayDesc.Direction, N, GLASS_IOR, tir);
 
             // If total internal reflection, treat as fully reflective
             if (tir)
@@ -798,14 +1031,16 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
                 transmitAmount = 1.0 - surfaceInfo.alpha;
             }
 
-            // Trace refracted ray to get what's behind the glass
+            // Trace refracted ray with dispersion and/or frosted glass support
             float3 refractedColor = 0.0;
             if (!tir && transmitAmount > 0.01)
             {
-                refractedColor = traceGlassRefraction(
-                    surfaceInfo.position, refractDir, N,
+                // Use dispersion-aware function (handles frosted glass too)
+                refractedColor = traceGlassWithDispersion(
+                    surfaceInfo.position, rayState.rayDesc.Direction, N,
                     surfaceInfo.color, surfaceInfo.alpha, ctx,
-                    GLASS_MAX_BOUNCES);
+                    GLASS_MAX_BOUNCES, GLASS_ROUGHNESS,
+                    float2(dispatchThreadID.xy));
             }
 
             // Glass surface gets some of the light for tinted effect
