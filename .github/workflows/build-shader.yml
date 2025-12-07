@@ -23,37 +23,27 @@ on:
 env:
   VANILLA_BASE_URL: https://cdn.bedrock.graphics/vanilla/v23
   VANILLA_VERSION: v23
+  DXC_VERSION: "1.8.2505.32"
 
 jobs:
   build:
     name: Build Shader
-    runs-on: ubuntu-latest
-    container:
-      image: jasongardner/dxc:latest
+    runs-on: windows-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install system dependencies
-        run: |
-          apt-get update
-          apt-get install -y python3 python3-pip python3-venv curl libstdc++6 libc6 unzip
-          python3 --version
-          pip3 --version
-
-      - name: Cache pip packages
-        uses: actions/cache@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          path: ~/.cache/pip
-          key: pip-lazurite-${{ runner.os }}
-          restore-keys: |
-            pip-lazurite-
+          python-version: '3.12'
+          cache: 'pip'
 
       - name: Install Lazurite
         run: |
-          pip3 install --break-system-packages lazurite
-          pip3 show lazurite | grep -E "^(Name|Version):"
+          pip install lazurite
+          pip show lazurite
 
       - name: Cache vanilla materials
         id: cache-vanilla
@@ -64,92 +54,106 @@ jobs:
 
       - name: Download vanilla material.bin files
         if: steps.cache-vanilla.outputs.cache-hit != 'true'
+        shell: pwsh
         run: |
-          set -e
-          mkdir -p vanilla
-          echo "Downloading RTXStub.material.bin..."
-          curl -fSL "${{ env.VANILLA_BASE_URL }}/RTXStub.material.bin" -o vanilla/RTXStub.material.bin
-          echo "Downloading RTXPostFX.Tonemapping.material.bin..."
-          curl -fSL "${{ env.VANILLA_BASE_URL }}/RTXPostFX.Tonemapping.material.bin" -o vanilla/RTXPostFX.Tonemapping.material.bin
-          echo "Downloading RTXPostFX.Bloom.material.bin..."
-          curl -fSL "${{ env.VANILLA_BASE_URL }}/RTXPostFX.Bloom.material.bin" -o vanilla/RTXPostFX.Bloom.material.bin
-          echo "Downloaded vanilla materials:"
-          ls -la vanilla/
+          New-Item -ItemType Directory -Force -Path vanilla
+          Write-Host "Downloading RTXStub.material.bin..."
+          Invoke-WebRequest -Uri "${{ env.VANILLA_BASE_URL }}/RTXStub.material.bin" -OutFile "vanilla/RTXStub.material.bin"
+          Write-Host "Downloading RTXPostFX.Tonemapping.material.bin..."
+          Invoke-WebRequest -Uri "${{ env.VANILLA_BASE_URL }}/RTXPostFX.Tonemapping.material.bin" -OutFile "vanilla/RTXPostFX.Tonemapping.material.bin"
+          Write-Host "Downloading RTXPostFX.Bloom.material.bin..."
+          Invoke-WebRequest -Uri "${{ env.VANILLA_BASE_URL }}/RTXPostFX.Bloom.material.bin" -OutFile "vanilla/RTXPostFX.Bloom.material.bin"
+          Get-ChildItem vanilla/
 
       - name: Verify vanilla materials
+        shell: pwsh
         run: |
-          echo "Vanilla materials:"
-          ls -la vanilla/
+          Write-Host "Vanilla materials:"
+          Get-ChildItem vanilla/
+
+      - name: Cache DXC
+        id: cache-dxc
+        uses: actions/cache@v4
+        with:
+          path: dxc/
+          key: dxc-windows-${{ env.DXC_VERSION }}
+
+      - name: Download DXC (Microsoft DirectX Shader Compiler)
+        if: steps.cache-dxc.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          Write-Host "Downloading DXC..."
+          Invoke-WebRequest -Uri "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v${{ env.DXC_VERSION }}/dxc_2025_05_32.zip" -OutFile "dxc.zip"
+          Expand-Archive -Path "dxc.zip" -DestinationPath "dxc" -Force
+          Remove-Item "dxc.zip"
+          Get-ChildItem dxc/ -Recurse | Where-Object { $_.Name -like "dxc*" }
 
       - name: Cache shaderc
         id: cache-shaderc
         uses: actions/cache@v4
         with:
-          path: /usr/local/bin/shaderc
-          key: shaderc-linux-x64-bgfx-mcbe
+          path: shaderc.exe
+          key: shaderc-windows-x64-bgfx-mcbe
 
       - name: Download shaderc (veka0 bgfx-mcbe)
         if: steps.cache-shaderc.outputs.cache-hit != 'true'
+        shell: pwsh
         run: |
-          curl -sL "https://github.com/veka0/bgfx-mcbe/releases/download/binaries/shaderc-linux-x64.zip" -o shaderc.zip
-          unzip shaderc.zip
-          chmod +x shadercRelease
-          mv shadercRelease /usr/local/bin/shaderc
-          rm -f shaderc.zip
+          Write-Host "Downloading shaderc..."
+          Invoke-WebRequest -Uri "https://github.com/veka0/bgfx-mcbe/releases/download/binaries/shaderc-win-x64.zip" -OutFile "shaderc.zip"
+          Expand-Archive -Path "shaderc.zip" -DestinationPath "." -Force
+          Remove-Item "shaderc.zip"
+          if (Test-Path "shadercRelease.exe") {
+            Rename-Item "shadercRelease.exe" "shaderc.exe"
+          }
+          Get-ChildItem shaderc*
 
-      - name: Verify shaderc installation
+      - name: Verify compiler installations
+        shell: pwsh
         run: |
-          echo "Shaderc installed:"
-          which shaderc
-          ls -la /usr/local/bin/shaderc
-          shaderc --help 2>&1 | head -20 || echo "Shaderc help not available"
-
-      - name: Verify DXC installation
-        run: |
-          echo "Looking for DXC..."
-          which dxc || find /usr -name "dxc*" 2>/dev/null || find /opt -name "dxc*" 2>/dev/null || echo "DXC not found"
-          DXC_PATH=$(which dxc 2>/dev/null || echo "")
-          if [ -z "$DXC_PATH" ]; then
-            # Try common locations
-            for p in /usr/bin/dxc /opt/dxc/bin/dxc /usr/local/bin/dxc; do
-              if [ -x "$p" ]; then
-                DXC_PATH="$p"
-                break
-              fi
-            done
-          fi
-          echo "DXC_PATH=$DXC_PATH" >> $GITHUB_ENV
-          if [ -n "$DXC_PATH" ]; then
-            echo "Found DXC at: $DXC_PATH"
-            "$DXC_PATH" --version || echo "DXC version check failed"
-          else
-            echo "WARNING: DXC not found!"
-          fi
+          Write-Host "=== DXC ==="
+          $dxcPath = Get-ChildItem -Path dxc -Recurse -Filter "dxc.exe" | Select-Object -First 1
+          Write-Host "DXC path: $($dxcPath.FullName)"
+          & $dxcPath.FullName --version
+          Write-Host ""
+          Write-Host "=== Shaderc ==="
+          Write-Host "Shaderc path: $PWD\shaderc.exe"
+          & "$PWD\shaderc.exe" --help 2>&1 | Select-Object -First 10
 
       - name: Run template generation script
+        shell: pwsh
         run: |
-          cd src
-          python3 script.py
+          Set-Location src
+          python script.py
         continue-on-error: true
 
       - name: Build shaders with Lazurite
+        shell: pwsh
         run: |
-          set -o pipefail
-          mkdir -p build
-          echo "=== LAZURITE BUILD ===" | tee build/build.log
-          echo "Vanilla materials:" | tee -a build/build.log
-          ls -la vanilla/ 2>&1 | tee -a build/build.log
-          echo "" | tee -a build/build.log
-          echo "Running build command..." | tee -a build/build.log
-          echo "DXC path: $DXC_PATH" | tee -a build/build.log
-          echo "Shaderc path: /usr/local/bin/shaderc" | tee -a build/build.log
-          lazurite build project/ -o build/ --shaderc /usr/local/bin/shaderc --dxc "$DXC_PATH" 2>&1 | tee -a build/build.log
-          BUILD_STATUS=$?
-          echo "" | tee -a build/build.log
-          echo "=== BUILD RESULT (exit code: $BUILD_STATUS) ===" | tee -a build/build.log
-          echo "Build directory contents:" | tee -a build/build.log
-          ls -la build/ 2>&1 | tee -a build/build.log
-          exit $BUILD_STATUS
+          New-Item -ItemType Directory -Force -Path build
+
+          # Find DXC path
+          $dxcPath = (Get-ChildItem -Path dxc -Recurse -Filter "dxc.exe" | Select-Object -First 1).FullName
+          $shadercPath = "$PWD\shaderc.exe"
+
+          Write-Host "=== LAZURITE BUILD ===" | Tee-Object -FilePath build/build.log
+          Write-Host "DXC path: $dxcPath" | Tee-Object -FilePath build/build.log -Append
+          Write-Host "Shaderc path: $shadercPath" | Tee-Object -FilePath build/build.log -Append
+          Write-Host "" | Tee-Object -FilePath build/build.log -Append
+          Write-Host "Vanilla materials:" | Tee-Object -FilePath build/build.log -Append
+          Get-ChildItem vanilla/ | Tee-Object -FilePath build/build.log -Append
+          Write-Host "" | Tee-Object -FilePath build/build.log -Append
+          Write-Host "Running build command..." | Tee-Object -FilePath build/build.log -Append
+
+          lazurite build project/ -o build/ --shaderc $shadercPath --dxc $dxcPath 2>&1 | Tee-Object -FilePath build/build.log -Append
+          $buildStatus = $LASTEXITCODE
+
+          Write-Host "" | Tee-Object -FilePath build/build.log -Append
+          Write-Host "=== BUILD RESULT (exit code: $buildStatus) ===" | Tee-Object -FilePath build/build.log -Append
+          Write-Host "Build directory contents:" | Tee-Object -FilePath build/build.log -Append
+          Get-ChildItem build/ | Tee-Object -FilePath build/build.log -Append
+
+          exit $buildStatus
 
       - name: Upload shader artifacts
         uses: actions/upload-artifact@v4
