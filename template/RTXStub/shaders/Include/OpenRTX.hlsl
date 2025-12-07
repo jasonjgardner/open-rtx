@@ -317,21 +317,44 @@ float3 shadeSurfaceDirectPBR(EnhancedSurface surface, OpenRTXContext ctx)
 }
 
 // Ambient/indirect lighting (never shadowed)
+// This approximates what the irradiance cache would provide:
+// - Hemisphere-based sky irradiance
+// - Ground bounce contribution
+// - Time-of-day scaling
 float3 shadeSurfaceAmbientPBR(EnhancedSurface surface, OpenRTXContext ctx)
 {
     float3 result = 0.0;
 
-    // Ambient lighting from game - ensure reasonable minimum
+    // Game-provided ambient - ensure reasonable minimum
     float3 ambient = ctx.constantAmbient;
-    ambient = max(ambient, 0.03);  // Minimum ambient to prevent pitch black
+    ambient = max(ambient, 0.03);
 
-    result += surface.albedo * ambient * surface.ao;
+    // Time-of-day factor for indirect lighting
+    float dayFactor = getDayFactor(ctx.sunDir);
 
-    // Add slight sky contribution based on normal direction
-    float skyFactor = saturate(dot(surface.normal, float3(0, 1, 0)) * 0.5 + 0.5);
-    result += surface.albedo * ctx.gameSkyColor * 0.05 * skyFactor * surface.ao;
+    // === INDIRECT DIFFUSE (approximating irradiance cache) ===
+    // In the full system, this would come from geometryInfo.incomingIrradiance
+    // Here we approximate with hemisphere-based sky/ground contribution
 
-    // Emissive (never shadowed)
+    // Sky hemisphere contribution (upward-facing surfaces get more sky light)
+    float skyWeight = saturate(dot(surface.normal, float3(0, 1, 0)) * 0.5 + 0.5);
+    float3 skyIrradiance = lerp(ctx.gameSkyColorDown, ctx.gameSkyColorUp, skyWeight);
+    skyIrradiance = max(skyIrradiance, 0.02);  // Minimum sky brightness
+
+    // Ground bounce contribution (downward-facing surfaces get ground reflection)
+    float groundWeight = saturate(-dot(surface.normal, float3(0, 1, 0)) * 0.5 + 0.5);
+    float3 groundColor = float3(0.1, 0.08, 0.05);  // Approximate ground albedo
+    float3 groundIrradiance = groundColor * ctx.sunColor * dayFactor * 0.3;
+
+    // Combine indirect sources
+    float3 indirectIrradiance = skyIrradiance * 0.15 + groundIrradiance * groundWeight;
+    indirectIrradiance *= dayFactor * 0.5 + 0.5;  // Scale with time of day
+
+    // Apply to diffuse albedo (following GI pattern: irradiance * diffuseColour)
+    result += surface.albedo * (ambient + indirectIrradiance) * surface.ao;
+
+    // === EMISSIVE (never shadowed) ===
+    // Emissive surfaces emit light directly
     if (surface.emissive > 0.0)
     {
         result += surface.albedo * surface.emissive * EMISSIVE_INTENSITY;
