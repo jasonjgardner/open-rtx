@@ -276,8 +276,9 @@ float3 traceSingleReflection(float3 origin, float3 reflectDir, float3 normal, Op
         // Add ambient
         directLight += surfaceInfo.color * ctx.constantAmbient;
 
-        // Add emissive (scaled by EMISSIVE_INTENSITY for visible glow)
-        directLight += surfaceInfo.color * surfaceInfo.emissive * EMISSIVE_INTENSITY;
+        // Add emissive with indirect boost (allows emissive to cast more GI light)
+        // Uses INDIRECT_EMISSIVE_BOOST to make torches/glowstone light up surroundings
+        directLight += surfaceInfo.color * surfaceInfo.emissive * EMISSIVE_INTENSITY * INDIRECT_EMISSIVE_BOOST;
 
         reflectionColor = directLight;
     }
@@ -497,7 +498,8 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
     surface.normal = surfaceInfo.normal;
     surface.geometryNormal = geometryInfo.geometryNormal;
     surface.viewDir = -rayState.rayDesc.Direction;
-    surface.albedo = surfaceInfo.color;
+    // Kill diffuse for emissive surfaces (they emit, not reflect)
+    surface.albedo = lerp(surfaceInfo.color, 0.0, surfaceInfo.emissive);
     surface.roughness = max(surfaceInfo.roughness, MIN_ROUGHNESS);
     surface.metalness = surfaceInfo.metalness;
     surface.ao = 1.0;

@@ -469,7 +469,8 @@ SurfaceInfo MaterialVanilla(HitInfo hitInfo, GeometryInfo geometryInfo, ObjectIn
                 mers.a = texel.a;
         }
         surfaceInfo.metalness = mers.r;
-        surfaceInfo.emissive = mers.g;
+        // Apply gamma 2 correction to emissive (texture value 0.5 -> 0.25 intensity)
+        surfaceInfo.emissive = mers.g * mers.g;
         surfaceInfo.roughness = mers.b;
         surfaceInfo.subsurface = mers.a;
 
