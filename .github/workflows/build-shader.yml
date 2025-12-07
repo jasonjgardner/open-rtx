@@ -23,6 +23,7 @@ on:
 env:
   VANILLA_VERSION: v23
   DXC_VERSION: "1.8.2505.1"
+  LAZURITE_VERSION: "0.5.1"
 
 jobs:
   build:
@@ -43,9 +44,16 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Cache pip packages
+        id: cache-pip
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: pip-windows-py312-lazurite-${{ env.LAZURITE_VERSION }}
+
       - name: Install Lazurite
         run: |
-          pip install lazurite
+          pip install lazurite==${{ env.LAZURITE_VERSION }}
           pip show lazurite
 
       - name: Cache vanilla materials
