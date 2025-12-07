@@ -1186,7 +1186,13 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
             float NdotV = abs(dot(N, viewDir));
 
             // Calculate Fresnel reflectance using glass IOR
-            float fresnel = glassFresnelReflectance(NdotV, GLASS_IOR);
+            // Apply strength parameter and cap to prevent excessive washout at grazing angles
+            float fresnelRaw = glassFresnelReflectance(NdotV, GLASS_IOR);
+            float fresnelBase = 0.04;  // Base reflectance at normal incidence (IOR ~1.5)
+            // Interpolate between base and full Fresnel based on strength parameter
+            float fresnel = lerp(fresnelBase, fresnelRaw, GLASS_FRESNEL_STRENGTH);
+            // Cap maximum reflectance to preserve color transmission
+            fresnel = min(fresnel, GLASS_FRESNEL_MAX);
 
             // For clear glass (low alpha), most light transmits with refraction
             // For tinted glass (high alpha), more absorption/tinting
@@ -1217,13 +1223,14 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
 
             // Combine: Fresnel reflection + transmitted/refracted light
             // Beer-Lambert absorption already applied in trace - no additional tinting needed
-            // Transmission factor accounts for Fresnel reflectance only
             float transmissionFactor = 1.0 - fresnel;
             float3 transmittedLight = refractedColor * transmissionFactor;
 
-            // Specular reflection from glass surface (environment/sun reflection)
+            // Trace actual reflection for glass specular (not just sky)
+            // This prevents washed-out appearance in enclosed spaces
             float3 reflectDir = reflect(rayState.rayDesc.Direction, N);
-            float3 reflectedLight = renderSkyWithClouds(reflectDir, ctx);
+            float3 reflectedLight = traceSingleReflection(
+                surfaceInfo.position, reflectDir, N, ctx);
             float3 glassSpecular = reflectedLight * fresnel;
 
             emission = transmittedLight + glassSpecular;

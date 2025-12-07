@@ -759,6 +759,18 @@
 #define GLASS_MIN_THICKNESS 0.1
 #endif
 
+// Fresnel effect strength (0 = no Fresnel, 1 = full physical Fresnel)
+// Lower values preserve more color transmission at grazing angles
+#ifndef GLASS_FRESNEL_STRENGTH
+#define GLASS_FRESNEL_STRENGTH 0.7
+#endif
+
+// Maximum Fresnel reflectance cap (prevents total washout at extreme angles)
+// Physical max is 1.0, but capping lower preserves color visibility
+#ifndef GLASS_FRESNEL_MAX
+#define GLASS_FRESNEL_MAX 0.6
+#endif
+
 // =============================================================================
 // CAUSTICS SETTINGS
 // =============================================================================
