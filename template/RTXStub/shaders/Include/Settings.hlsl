@@ -435,7 +435,29 @@
 #endif
 
 #ifndef FOG_MAX_DISTANCE
-#define FOG_MAX_DISTANCE 256.0  // Blocks
+#define FOG_MAX_DISTANCE 256.0  // Blocks (VOLUMETRIC_FOG_RANGE equivalent)
+#endif
+
+// Phase function asymmetry (Henyey-Greenstein g parameter)
+// g > 0: Forward scattering (sun glow when looking toward light)
+// g = 0: Isotropic (uniform in all directions)
+// g < 0: Back scattering
+#ifndef AIR_FOG_ASYMMETRY
+#define AIR_FOG_ASYMMETRY 0.075  // Subtle forward scattering in air
+#endif
+
+#ifndef WATER_FOG_ASYMMETRY
+#define WATER_FOG_ASYMMETRY 0.23  // Stronger scattering underwater
+#endif
+
+// Fog scattering coefficients (RGB wavelength-dependent)
+#ifndef FOG_SCATTERING_COEFFICIENTS
+#define FOG_SCATTERING_COEFFICIENTS float3(0.002, 0.00184, 0.0015)  // Rayleigh-like
+#endif
+
+// Noon fog reduction (1.0 = no reduction at midday)
+#ifndef NOON_FOG_REDUCTION
+#define NOON_FOG_REDUCTION 0.7  // 30% less fog at noon
 #endif
 
 // Volumetric ray marching

@@ -47,21 +47,49 @@ float fogDensityUniform()
     return FOG_DENSITY;
 }
 
-// Combined fog density
-float getFogDensity(float3 worldPos, float rainIntensity, float time)
+// Density modifier based on height and time-of-day
+// Following the froxel-based approach from BetterRTX
+float calcDensityModifier(float3 worldPos, float3 sunDir, bool isUnderwater)
 {
-    float baseDensity = fogDensityExponential(worldPos.y, 64.0); // Sea level
+    float densityModifier = 1.0;
+
+    if (!isUnderwater)
+    {
+        // Height-based falloff (exponential)
+        float heightFactor = exp(-FOG_HEIGHT_FALLOFF * max(0.0, worldPos.y - 64.0));
+        densityModifier *= heightFactor;
+
+        // Noon fog reduction (less fog at midday)
+        #if NOON_FOG_REDUCTION != 1.0
+        float dayFactor = saturate(sunDir.y * 2.0 + 0.5);
+        float noonFactor = lerp(1.0, NOON_FOG_REDUCTION, dayFactor * dayFactor);
+        densityModifier *= noonFactor;
+        #endif
+    }
+
+    return densityModifier;
+}
+
+// Combined fog density with all modifiers
+float getFogDensity(float3 worldPos, float rainIntensity, float time, float3 sunDir, bool isUnderwater)
+{
+    float baseDensity = FOG_DENSITY;
+
+    // Apply density modifiers
+    baseDensity *= calcDensityModifier(worldPos, sunDir, isUnderwater);
 
 #if ENABLE_RAIN_FOG
-    // Increase density during rain
-    baseDensity *= 1.0 + rainIntensity * RAIN_FOG_AMOUNT;
+    // Increase density during rain (lerp toward STATIC_RAIN_FOG_AMOUNT)
+    baseDensity = lerp(baseDensity, baseDensity * (1.0 + RAIN_FOG_AMOUNT), rainIntensity);
 #endif
 
-    // Optional: time-based density variation
-    float timeVariation = sin(time * 0.1) * 0.1 + 1.0;
-    baseDensity *= timeVariation;
-
     return baseDensity;
+}
+
+// Backwards compatibility - without sun direction
+float getFogDensity(float3 worldPos, float rainIntensity, float time)
+{
+    return getFogDensity(worldPos, rainIntensity, time, float3(0, 1, 0), false);
 }
 
 // =============================================================================
@@ -89,6 +117,24 @@ float cornetteShanks(float cosTheta, float g)
 float dualLobePhase(float cosTheta, float g1, float g2, float blend)
 {
     return lerp(henyeyGreenstein(cosTheta, g2), henyeyGreenstein(cosTheta, g1), blend);
+}
+
+// Air fog phase function using AIR_FOG_ASYMMETRY setting
+float airFogPhase(float cosTheta)
+{
+    return henyeyGreenstein(cosTheta, AIR_FOG_ASYMMETRY);
+}
+
+// Water fog phase function using WATER_FOG_ASYMMETRY setting
+float waterFogPhase(float cosTheta)
+{
+    return henyeyGreenstein(cosTheta, WATER_FOG_ASYMMETRY);
+}
+
+// Isotropic phase function for GI inscatter (uniform in all directions)
+float isotropicPhase()
+{
+    return 1.0 / (4.0 * kPi);
 }
 
 // =============================================================================
