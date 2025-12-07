@@ -320,35 +320,52 @@ float3 shadeSurfaceDirectPBR(EnhancedSurface surface, OpenRTXContext ctx)
 // This approximates what the irradiance cache would provide:
 // - Hemisphere-based sky irradiance
 // - Ground bounce contribution
+// - Horizontal fill light for vertical surfaces
 // - Time-of-day scaling
 float3 shadeSurfaceAmbientPBR(EnhancedSurface surface, OpenRTXContext ctx)
 {
     float3 result = 0.0;
 
-    // Game-provided ambient - ensure reasonable minimum
+    // Game-provided ambient - ensure reasonable minimum for indoor/shadow areas
     float3 ambient = ctx.constantAmbient;
-    ambient = max(ambient, 0.03);
+    ambient = max(ambient, 0.05);  // Increased minimum to prevent crushed shadows
 
     // Time-of-day factor for indirect lighting
     float dayFactor = getDayFactor(ctx.sunDir);
 
     // === INDIRECT DIFFUSE (approximating irradiance cache) ===
     // In the full system, this would come from geometryInfo.incomingIrradiance
-    // Here we approximate with hemisphere-based sky/ground contribution
+    // Here we approximate with hemisphere-based sky/ground/horizontal contribution
 
-    // Sky hemisphere contribution (upward-facing surfaces get more sky light)
-    float skyWeight = saturate(dot(surface.normal, float3(0, 1, 0)) * 0.5 + 0.5);
+    // Normal-based weights for different irradiance sources
+    float upDot = dot(surface.normal, float3(0, 1, 0));
+    float skyWeight = saturate(upDot * 0.5 + 0.5);       // 0.5-1.0 for upward faces
+    float groundWeight = saturate(-upDot * 0.5 + 0.5);   // 0.5-1.0 for downward faces
+    float horizontalWeight = 1.0 - abs(upDot);            // 1.0 for vertical, 0.0 for up/down
+
+    // Sky hemisphere contribution
     float3 skyIrradiance = lerp(ctx.gameSkyColorDown, ctx.gameSkyColorUp, skyWeight);
-    skyIrradiance = max(skyIrradiance, 0.02);  // Minimum sky brightness
+    skyIrradiance = max(skyIrradiance, 0.03);
 
-    // Ground bounce contribution (downward-facing surfaces get ground reflection)
-    float groundWeight = saturate(-dot(surface.normal, float3(0, 1, 0)) * 0.5 + 0.5);
-    float3 groundColor = float3(0.1, 0.08, 0.05);  // Approximate ground albedo
-    float3 groundIrradiance = groundColor * ctx.sunColor * dayFactor * 0.3;
+    // Ground bounce contribution
+    float3 groundColor = float3(0.12, 0.10, 0.08);  // Warmer ground albedo
+    float3 groundIrradiance = groundColor * ctx.sunColor * dayFactor * 0.4;
 
-    // Combine indirect sources
-    float3 indirectIrradiance = skyIrradiance * 0.15 + groundIrradiance * groundWeight;
-    indirectIrradiance *= dayFactor * 0.5 + 0.5;  // Scale with time of day
+    // Horizontal fill light (for vertical faces like walls)
+    // Approximates light bouncing from surrounding environment
+    float3 horizonColor = lerp(ctx.gameSkyColorDown, ctx.gameSkyColor, 0.5);
+    float3 horizontalIrradiance = horizonColor * 0.3;
+
+    // Combine all indirect sources
+    float3 indirectIrradiance = skyIrradiance * 0.2 * skyWeight
+                              + groundIrradiance * groundWeight
+                              + horizontalIrradiance * horizontalWeight;
+
+    // Ensure minimum indirect for all surfaces (prevents crushed shadows)
+    indirectIrradiance = max(indirectIrradiance, 0.02);
+
+    // Scale with time of day (but maintain minimum at night)
+    indirectIrradiance *= dayFactor * 0.6 + 0.4;
 
     // Apply to diffuse albedo (following GI pattern: irradiance * diffuseColour)
     result += surface.albedo * (ambient + indirectIrradiance) * surface.ao;
