@@ -422,8 +422,8 @@ WaterSurface evaluateWaterSurface(float3 basePosition, float3 viewDir, float tim
     // Water color (slightly blue-green)
     water.baseColor = float3(0.05, 0.15, 0.2);
 
-    // Roughness - use override if defined, otherwise dynamic based on rain
-#ifdef USE_WATER_ROUGHNESS_OVERRIDE
+    // Roughness
+#if WATER_ROUGHNESS_OVERRIDE >= 0.0
     water.roughness = WATER_ROUGHNESS_OVERRIDE;
 #else
     water.roughness = 0.02 + rainIntensity * 0.05; // Rougher in rain

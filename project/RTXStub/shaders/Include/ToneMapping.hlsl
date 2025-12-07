@@ -42,9 +42,9 @@ float3 sRGBToLinear(float3 srgb)
 }
 
 // Linear to sRGB
-float3 linearToSRGB(float3 linearColor)
+float3 linearToSRGB(float3 linear)
 {
-    return pow(max(linearColor, 0.0), 1.0 / 2.2);
+    return pow(max(linear, 0.0), 1.0 / 2.2);
 }
 
 // Luminance calculation (Rec. 709)
