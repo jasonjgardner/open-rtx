@@ -894,10 +894,15 @@ float3 traceReflection(float3 origin, float3 viewDir, float3 normal, float rough
         reflectionColor = accumulatedColor / totalWeight;
     }
 
-    // Compute Fresnel
+    // Compute Fresnel with metal-aware F90
+    // For metals, F90 should be tinted rather than pure white to preserve color at grazing angles
     float3 f0 = lerp(0.04, albedo, metalness);
+    // F90: For dielectrics = white, for metals = slightly brighter version of F0
+    // This preserves metal color at grazing angles instead of going pure white
+    float3 f90 = lerp(1.0, saturate(albedo * 1.2 + 0.2), metalness);
     float NdotV = saturate(dot(normal, -viewDir));
-    float3 fresnel = f0 + (1.0 - f0) * pow(1.0 - NdotV, 5.0);
+    float fresnelPow = pow(1.0 - NdotV, 5.0);
+    float3 fresnel = f0 + (f90 - f0) * fresnelPow;
 
     // Apply fresnel to reflection
     reflectionColor *= fresnel;
@@ -906,11 +911,11 @@ float3 traceReflection(float3 origin, float3 viewDir, float3 normal, float rough
     float roughnessFade = 1.0 - saturate(effectiveRoughness / REFLECTION_MAX_ROUGHNESS);
     reflectionColor *= roughnessFade;
 
-    // Apply simple edge-aware filtering to reduce noise
-    // Using a subtle contrast-based smoothing factor
-    float luminance = dot(reflectionColor, float3(0.299, 0.587, 0.114));
+    // Apply edge-aware filtering for noise reduction (preserving color for metals)
     float smoothFactor = saturate(1.0 - effectiveRoughness * 2.0);
-    reflectionColor = lerp(reflectionColor, reflectionColor * smoothFactor + luminance * (1.0 - smoothFactor) * fresnel, effectiveRoughness);
+    // For metals, preserve color; for dielectrics, allow some desaturation
+    float3 smoothedColor = lerp(reflectionColor * smoothFactor, reflectionColor, metalness);
+    reflectionColor = lerp(reflectionColor, smoothedColor, effectiveRoughness);
 #endif
 
     return reflectionColor;

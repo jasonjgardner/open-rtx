@@ -75,6 +75,29 @@ float3 fresnelSchlick(float cosTheta, float3 f0)
     return f0 + (1.0 - f0) * t5;
 }
 
+// Schlick's approximation with custom F90 (grazing angle reflectance)
+// For metals, F90 can be tinted to preserve color at grazing angles
+float3 fresnelSchlickF90(float cosTheta, float3 f0, float3 f90)
+{
+    float t = 1.0 - cosTheta;
+    float t2 = t * t;
+    float t5 = t2 * t2 * t;
+    return f0 + (f90 - f0) * t5;
+}
+
+// Metal-aware Fresnel: preserves metal color at grazing angles
+// For dielectrics: F90 = white (1.0)
+// For metals: F90 = brightened version of albedo to preserve tint
+float3 fresnelSchlickMetal(float cosTheta, float3 f0, float3 albedo, float metalness)
+{
+    float t = 1.0 - cosTheta;
+    float t2 = t * t;
+    float t5 = t2 * t2 * t;
+    // For metals, F90 preserves color; for dielectrics, F90 = white
+    float3 f90 = lerp(1.0, saturate(albedo * 1.2 + 0.2), metalness);
+    return f0 + (f90 - f0) * t5;
+}
+
 // Schlick's approximation with roughness for IBL
 float3 fresnelSchlickRoughness(float cosTheta, float3 f0, float roughness)
 {
@@ -325,6 +348,19 @@ float3 evaluateSpecularBRDF(float3 f0, float roughness, float NdotV, float NdotL
 
     float D = D_Specular(NdotH, alpha);
     float3 F = fresnelSchlick(VdotH, f0);
+    float V = V_SmithGGXCorrelated(NdotV, NdotL, alpha);
+
+    return D * F * V;
+}
+
+// Metal-aware specular BRDF - preserves metal color at grazing angles
+float3 evaluateSpecularBRDFMetal(float3 f0, float3 albedo, float metalness, float roughness,
+                                  float NdotV, float NdotL, float NdotH, float VdotH)
+{
+    float alpha = roughnessToAlpha(roughness);
+
+    float D = D_Specular(NdotH, alpha);
+    float3 F = fresnelSchlickMetal(VdotH, f0, albedo, metalness);
     float V = V_SmithGGXCorrelated(NdotV, NdotL, alpha);
 
     return D * F * V;

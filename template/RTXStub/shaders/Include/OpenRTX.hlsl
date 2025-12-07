@@ -285,12 +285,13 @@ float3 shadeSurfaceDirectPBR(EnhancedSurface surface, OpenRTXContext ctx)
             float3 diffuse = evaluateDiffuseBRDF(diffuseAlbedo, surface.roughness, NdotV, NdotL, VdotH, N, V, L);
 #endif
 
-            // Energy conservation
-            float3 F = fresnelSchlick(VdotH, f0);
+            // Energy conservation - use metal-aware Fresnel to preserve metal color
+            float3 F = fresnelSchlickMetal(VdotH, f0, surface.albedo, surface.metalness);
             diffuse *= (1.0 - F);
 
-            // Specular
-            float3 specular = evaluateSpecularBRDF(f0, surface.roughness, NdotV, NdotL, NdotH, VdotH);
+            // Specular - use metal-aware BRDF to preserve metal color at grazing angles
+            float3 specular = evaluateSpecularBRDFMetal(f0, surface.albedo, surface.metalness,
+                                                         surface.roughness, NdotV, NdotL, NdotH, VdotH);
 
             // Sun light using game-provided color with time-of-day scaling
             float3 sunLight = ctx.sunColor * timeScale * 3.0;  // Scale for PBR response
