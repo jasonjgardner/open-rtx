@@ -65,7 +65,7 @@
       },
       "FilterMoments": { "compute": "shaders/FilterMoments.hlsl" },
       "FilterMomentsSH": { "compute": "shaders/FilterMomentsSH.hlsl" },
-      "FinalCombine": { "compute": "shaders/FinalCombine.hlsl" },
+      "FinalCombine": { "compute": "shaders/FinalCombineOpenRTX.hlsl" },
       "FinalizeDenoising": { "compute": "shaders/FinalizeDenoising.hlsl" },
       "IncidentLightMeterInline": {
         "compute": "shaders/IncidentLightMeterInline.hlsl"
@@ -75,7 +75,7 @@
       },
       "PreBlasSkinning": { "compute": "shaders/PreBlasSkinning.hlsl" },
       "PrimaryCheckerboardRayGenInline": {
-        "compute": "shaders/PrimaryCheckerboardRayGenInline.hlsl"
+        "compute": "shaders/PrimaryCheckerboardRayGenInlineOpenRTX.hlsl"
       },
       "RefractionRayGenInline": {
         "compute": "shaders/RefractionRayGenInline.hlsl"
