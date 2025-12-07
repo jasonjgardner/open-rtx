@@ -139,6 +139,74 @@ GeometryInfo GetGeometryInfo(HitInfo hitInfo, ObjectInstance objectInstance) {
     geometryInfo.geometryNormal = normalize(cross((positions[1] - positions[0]), (positions[2] - positions[0])));
     // vertexNormal = normalize(vertexNormal); // Vertex normal is not normalized as GeometryInfo is meant to pass raw attribute values.
 
+    // ==========================================================================
+    // PUFFY CLOUD GEOMETRY - Normal perturbation for rounded cloud appearance
+    // ==========================================================================
+#if ENABLE_PUFFY_CLOUD_GEOMETRY
+    if (objectInstance.flags & kObjectInstanceFlagClouds)
+    {
+        float3 worldPos = geometryInfo.position;
+
+        // Create noise coordinates from world position
+        float3 noisePos = worldPos * PUFFY_CLOUD_NOISE_SCALE;
+
+        // Generate cellular pattern for billow centers (simplified Voronoi)
+        float3 cellId = floor(noisePos * PUFFY_CLOUD_BILLOW_FREQ);
+        float3 cellUV = frac(noisePos * PUFFY_CLOUD_BILLOW_FREQ);
+
+        // Find closest billow center
+        float minDist = 1.0;
+        float3 closestOffset = 0;
+
+        [unroll]
+        for (int x = -1; x <= 1; x++)
+        {
+            [unroll]
+            for (int z = -1; z <= 1; z++)
+            {
+                float3 neighbor = float3(x, 0, z);
+                float3 cellOffset = cellId + neighbor;
+
+                // Hash for random center within cell
+                uint3 q = uint3(int3(cellOffset * 127.0));
+                q = q * uint3(1597334677u, 3812015801u, 2798796415u);
+                uint n = (q.x ^ q.y ^ q.z) * 1597334677u;
+
+                float3 center = float3(
+                    float((n) & 0xFFu) / 255.0,
+                    0.5,
+                    float((n >> 8u) & 0xFFu) / 255.0
+                ) * 0.6 + 0.2;
+
+                float3 diff = neighbor + center - cellUV;
+                diff.y = 0;  // Keep horizontal for cloud tops
+                float dist = dot(diff, diff);
+
+                if (dist < minDist)
+                {
+                    minDist = dist;
+                    closestOffset = diff;
+                }
+            }
+        }
+
+        // Create dome-shaped normal perturbation
+        float dist = sqrt(minDist);
+        float domeHeight = saturate(1.0 - dist * 2.0);
+        domeHeight = domeHeight * domeHeight * (3.0 - 2.0 * domeHeight);  // Smoothstep
+
+        // Perturb normal to point outward from dome center
+        float3 domeNormal = normalize(float3(
+            -closestOffset.x * PUFFY_CLOUD_DISPLACEMENT,
+            1.0 + domeHeight * PUFFY_CLOUD_VERTICAL_BIAS,
+            -closestOffset.z * PUFFY_CLOUD_DISPLACEMENT
+        ));
+
+        // Blend with original normal
+        geometryInfo.geometryNormal = normalize(lerp(geometryInfo.geometryNormal, domeNormal, domeHeight * 0.8));
+    }
+#endif
+
     // To compute tangent and bitangent (aligned to UV), we have to solve for T and B from:
 
     // |T.x, B.x|                                |v1.x-v0.x, v2.x-v0.x|

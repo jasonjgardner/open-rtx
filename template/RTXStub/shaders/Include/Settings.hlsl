@@ -51,7 +51,7 @@
 #endif
 
 #ifndef ENABLE_VOLUMETRIC_CLOUDS
-#define ENABLE_VOLUMETRIC_CLOUDS 1  // Real-time volumetric cloud rendering
+#define ENABLE_VOLUMETRIC_CLOUDS 0  // Disabled: use vanilla mesh with puffy enhancement instead
 #endif
 
 #ifndef ENABLE_VOLUMETRIC_LIGHTING
@@ -419,6 +419,45 @@
 // Powder effect
 #ifndef CLOUD_POWDER_STRENGTH
 #define CLOUD_POWDER_STRENGTH 0.5
+#endif
+
+// =============================================================================
+// MESH CLOUD SETTINGS (Vanilla Cloud Geometry Enhancement)
+// =============================================================================
+
+// Enable puffy cloud mesh geometry (normal perturbation for rounded look)
+#ifndef ENABLE_PUFFY_CLOUD_GEOMETRY
+#define ENABLE_PUFFY_CLOUD_GEOMETRY 1
+#endif
+
+// Noise scale for displacement pattern (smaller = larger features)
+#ifndef PUFFY_CLOUD_NOISE_SCALE
+#define PUFFY_CLOUD_NOISE_SCALE 0.02
+#endif
+
+// Billow frequency - how many spherical bulges per cloud
+#ifndef PUFFY_CLOUD_BILLOW_FREQ
+#define PUFFY_CLOUD_BILLOW_FREQ 2.0
+#endif
+
+// Maximum displacement distance (visual strength)
+#ifndef PUFFY_CLOUD_DISPLACEMENT
+#define PUFFY_CLOUD_DISPLACEMENT 8.0
+#endif
+
+// Vertical bias - how much displacement favors upward direction
+#ifndef PUFFY_CLOUD_VERTICAL_BIAS
+#define PUFFY_CLOUD_VERTICAL_BIAS 2.0
+#endif
+
+// Cloud mesh texture scale
+#ifndef CLOUD_MESH_TEXTURE_SCALE
+#define CLOUD_MESH_TEXTURE_SCALE 1.0
+#endif
+
+// Cloud shadow opacity (for volumetric cloud shadows on vanilla mesh)
+#ifndef CLOUD_SHADOW_OPACITY
+#define CLOUD_SHADOW_OPACITY 0.3
 #endif
 
 // =============================================================================
