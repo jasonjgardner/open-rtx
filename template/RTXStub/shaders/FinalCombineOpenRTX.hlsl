@@ -95,13 +95,6 @@ void FinalCombine(
 #endif
 
     // ---------------------------
-    // Film Grain
-    // ---------------------------
-#if ENABLE_FILM_GRAIN
-    color = applyFilmGrain(color, uv, g_view.time, FILM_GRAIN_INTENSITY);
-#endif
-
-    // ---------------------------
     // Tonemapping
     // ---------------------------
     color = applyExposure(color, ctx.exposureEV);
@@ -109,6 +102,13 @@ void FinalCombine(
 
     // Convert to gamma space for further processing
     color = linearToSRGB(color);
+
+    // ---------------------------
+    // Film Grain (applied after tonemapping in LDR gamma space)
+    // ---------------------------
+#if ENABLE_FILM_GRAIN
+    color = applyFilmGrain(color, uv, g_view.time, FILM_GRAIN_INTENSITY);
+#endif
 
     // ---------------------------
     // Vignette

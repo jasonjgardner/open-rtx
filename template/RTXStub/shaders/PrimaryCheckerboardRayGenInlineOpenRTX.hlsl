@@ -1269,23 +1269,29 @@ float3 RenderRayOpenRTX(RayDesc rayDesc, out float outputDistance, out float3 ou
 
     const float maxDistance = 65504;
 
+    // Determine distance for outputs and volumetric effects
+    float effectiveDistance;
     if (all(rayState.throughput == 0))
     {
+        // Hit opaque surface - use actual hit distance
         outputDistance = min(rayState.distance, maxDistance);
         outputMotion = rayState.motion;
+        effectiveDistance = outputDistance;
     }
     else
     {
+        // Sky ray or partially transparent - use far distance for proper fog
         outputDistance = maxDistance;
         outputMotion = 0;
+        effectiveDistance = maxDistance;
     }
 
     // Render sky
     RenderSkyOpenRTX(rayState, ctx);
 
-    // Apply volumetric effects
+    // Apply volumetric effects using effective distance (not rayState.distance which may be 0)
 #if OPENRTX_ENABLED && ENABLE_VOLUMETRIC_LIGHTING
-    float3 finalColor = applyAtmosphericEffects(rayState.color, rayDesc.Direction, rayState.distance, ctx);
+    float3 finalColor = applyAtmosphericEffects(rayState.color, rayDesc.Direction, effectiveDistance, ctx);
 #else
     float3 finalColor = rayState.color;
 #endif
