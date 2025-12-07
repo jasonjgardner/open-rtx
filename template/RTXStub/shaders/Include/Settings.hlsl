@@ -745,6 +745,12 @@
 #define GLASS_DISPERSION_STRENGTH 0.02
 #endif
 
+// Thin glass threshold - glass thinner than this won't apply exit refraction
+// This maintains visible distortion for thin panes. Set higher for more distortion.
+#ifndef THIN_GLASS_THRESHOLD
+#define THIN_GLASS_THRESHOLD 0.25
+#endif
+
 // =============================================================================
 // CAUSTICS SETTINGS
 // =============================================================================

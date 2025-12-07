@@ -216,6 +216,7 @@ float3 traceGlassRefractionWithIOR(float3 origin, float3 incidentDir, float3 ent
     float3 currentDir = incidentDir;
     bool insideGlass = true;  // We start by entering glass
     float currentIOR = ior;
+    float totalGlassDistance = 0.0;  // Track distance traveled inside glass
 
     // First, refract the incident ray as it enters the glass (air to glass)
     bool tir;
@@ -262,13 +263,15 @@ float3 traceGlassRefractionWithIOR(float3 origin, float3 incidentDir, float3 ent
             {
                 float3 absorption = exp(-(1.0 - glassColor) * distance * GLASS_ABSORPTION_SCALE);
                 throughput *= absorption;
+                totalGlassDistance += distance;
             }
 
             // Determine if we hit glass or something else
-            bool hitGlass = (hitInfo.materialType == MATERIAL_TYPE_ALPHA_BLEND) &&
-                           (hitInfo.materialType != MATERIAL_TYPE_WATER);
+            bool hitGlass = (hitInfo.materialType == MATERIAL_TYPE_ALPHA_BLEND);
+            bool hitWater = (hitInfo.materialType == MATERIAL_TYPE_WATER);
 
-            if (hitGlass)
+            // Only treat as glass if it's alpha blend and not water
+            if (hitGlass && !hitWater && insideGlass)
             {
                 float3 hitNormal = surfaceInfo.normal;
 
@@ -277,6 +280,16 @@ float3 traceGlassRefractionWithIOR(float3 origin, float3 incidentDir, float3 ent
 
                 if (exitingGlass)
                 {
+                    // For very thin glass (like panes), skip exit refraction
+                    // This maintains the visual distortion effect
+                    if (totalGlassDistance < THIN_GLASS_THRESHOLD)
+                    {
+                        // Skip exit refraction for thin glass - maintain distorted direction
+                        currentOrigin = surfaceInfo.position;
+                        insideGlass = false;
+                        continue;
+                    }
+
                     // Exiting glass to air - use proper glass-to-air refraction
                     // Normal should point into the glass (opposite ray direction)
                     float3 exitNormal = -hitNormal;
@@ -1152,46 +1165,46 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
             // Calculate Fresnel reflectance using glass IOR
             float fresnel = glassFresnelReflectance(NdotV, GLASS_IOR);
 
-            // Blend between reflection and transmission based on Fresnel
-            // Higher Fresnel = more reflection, less transmission
-            float reflectAmount = fresnel * surfaceInfo.alpha;
-            float transmitAmount = (1.0 - fresnel) * (1.0 - surfaceInfo.alpha * 0.5);
+            // For clear glass (low alpha), most light transmits with refraction
+            // For tinted glass (high alpha), more absorption/tinting
+            float glassOpacity = surfaceInfo.alpha;
 
-            // Check for total internal reflection with base IOR
+            // Check for total internal reflection
             bool tir;
             float3 testDir = glassRefract(rayState.rayDesc.Direction, N, GLASS_IOR, tir);
 
-            // If total internal reflection, treat as fully reflective
-            if (tir)
-            {
-                reflectAmount = surfaceInfo.alpha;
-                transmitAmount = 1.0 - surfaceInfo.alpha;
-            }
-
-            // Trace refracted ray with dispersion and/or frosted glass support
+            // Trace refracted ray to get what's behind the glass
             float3 refractedColor = 0.0;
-            if (!tir && transmitAmount > 0.01)
+            if (!tir)
             {
                 // Use dispersion-aware function (handles frosted glass too)
                 refractedColor = traceGlassWithDispersion(
                     surfaceInfo.position, rayState.rayDesc.Direction, N,
-                    surfaceInfo.color, surfaceInfo.alpha, ctx,
+                    surfaceInfo.color, glassOpacity, ctx,
                     GLASS_MAX_BOUNCES, GLASS_ROUGHNESS,
                     pixelCoord);
             }
+            else
+            {
+                // Total internal reflection - use reflection instead
+                refractedColor = renderSkyWithClouds(reflect(rayState.rayDesc.Direction, N), ctx);
+            }
 
-            // Glass surface gets some of the light for tinted effect
-            float3 glassEmission = surfaceInfo.color * surfaceInfo.alpha * light * (1.0 - fresnel);
+            // Glass surface tint (for stained glass) - modulate transmitted light
+            float3 glassTint = lerp(float3(1, 1, 1), surfaceInfo.color, glassOpacity);
 
-            // Combine: glass tint + refracted scene
-            emission = glassEmission + refractedColor * transmitAmount * rayState.throughput;
+            // Combine: Fresnel reflection + transmitted/refracted light
+            // Most light goes through, tinted by glass color
+            float transmissionFactor = (1.0 - fresnel) * (1.0 - glassOpacity * 0.3);
+            float3 transmittedLight = refractedColor * glassTint * transmissionFactor;
 
-            // Throughput for what passes through without refraction trace
-            // (for subsequent layers in the ray march)
-            throughput = transmitAmount * (1.0 - surfaceInfo.alpha * 0.3);
+            // Small amount of surface lighting for visibility of glass itself
+            float3 glassSpecular = light * fresnel * 0.2;
 
-            // Tint throughput by glass color for stained glass effect
-            throughput *= lerp(1.0, surfaceInfo.color, surfaceInfo.alpha * 0.5);
+            emission = transmittedLight + glassSpecular;
+
+            // Throughput for any additional layers
+            throughput = 0.0;  // We've fully handled this with refraction trace
         }
         else
 #endif
