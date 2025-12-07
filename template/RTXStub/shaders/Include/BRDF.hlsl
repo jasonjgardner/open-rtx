@@ -380,7 +380,8 @@ float3 subsurfaceDisney(float3 albedo, float roughness, float NdotV, float NdotL
 
     float Fss90 = VdotH * VdotH * roughness;
     float Fss = lerp(1.0, Fss90, FL) * lerp(1.0, Fss90, FV);
-    float ss = 1.25 * (Fss * (1.0 / (NdotL + NdotV) - 0.5) + 0.5);
+    // Guard against division by zero at grazing angles
+    float ss = 1.25 * (Fss * (1.0 / max(NdotL + NdotV, 0.001) - 0.5) + 0.5);
 
     return albedo * kInvPi * lerp(1.0, ss, subsurface);
 }
