@@ -1041,7 +1041,7 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
                     surfaceInfo.position, rayState.rayDesc.Direction, N,
                     surfaceInfo.color, surfaceInfo.alpha, ctx,
                     GLASS_MAX_BOUNCES, GLASS_ROUGHNESS,
-                    float2(dispatchThreadID.xy));
+                    pixelCoord);
             }
 
             // Glass surface gets some of the light for tinted effect
