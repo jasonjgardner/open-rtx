@@ -352,15 +352,27 @@
 
 // Cloud density and coverage
 #ifndef CLOUD_COVERAGE
-#define CLOUD_COVERAGE 0.4  // 0-1, overall cloud coverage (reduced for less blocking)
+#define CLOUD_COVERAGE 0.5  // 0-1, overall cloud coverage
 #endif
 
 #ifndef CLOUD_DENSITY
-#define CLOUD_DENSITY 0.05  // Optical density multiplier (reduced for more translucent clouds)
+#define CLOUD_DENSITY 0.08  // Optical density multiplier
+#endif
+
+#ifndef CLOUD_DENSITY_MULTIPLIER
+#define CLOUD_DENSITY_MULTIPLIER 2.5  // Cloud thickness multiplier
 #endif
 
 #ifndef CLOUD_DETAIL_STRENGTH
 #define CLOUD_DETAIL_STRENGTH 0.35  // Worley noise erosion
+#endif
+
+#ifndef CLOUD_SHADOW_STRENGTH
+#define CLOUD_SHADOW_STRENGTH 0.7  // Terrain shadow intensity from clouds
+#endif
+
+#ifndef CIRRUS_OPACITY
+#define CIRRUS_OPACITY 0.25  // High cloud layer visibility
 #endif
 
 // Ray marching settings

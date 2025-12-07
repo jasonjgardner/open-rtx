@@ -259,7 +259,7 @@ float sampleCloudDensityLOD(float3 worldPos, float time, bool detailed, float di
         baseDensity = saturate(baseDensity);
     }
 
-    return baseDensity * CLOUD_DENSITY;
+    return baseDensity * CLOUD_DENSITY * CLOUD_DENSITY_MULTIPLIER;
 }
 
 // Original function for backwards compatibility (uses default LOD)
@@ -331,6 +331,42 @@ float sampleLightTransmittance(float3 pos, float3 lightDir, float time, int numS
     }
 
     return beerLambert(density * CLOUD_SCATTERING_COEFFICIENT);
+}
+
+// Multi-scattering light energy (Hillaire/Frostbite approach)
+// Returns accumulated light from multiple scattering octaves
+float3 sampleLightEnergy(float3 pos, float3 lightDir, float3 sunColor, float time,
+                         float cosTheta, float density, int numSamples)
+{
+    float transmittance = sampleLightTransmittance(pos, lightDir, time, numSamples);
+
+    float3 totalLight = 0.0;
+
+    // Multi-scattering octaves (Hillaire/Frostbite)
+    // Each octave: wider phase, reduced absorption, accumulated contribution
+    float sigmaS = CLOUD_SCATTERING_COEFFICIENT;
+    float sigmaE = sigmaS * 1.1;  // Extinction slightly higher than scattering
+
+    // Octave 0: Direct light with sharp phase function
+    float phase0 = cloudPhaseFunction(cosTheta);
+    float atten0 = transmittance;
+    totalLight += sunColor * phase0 * atten0;
+
+    // Octave 1: Secondary scattering - wider phase, reduced absorption (0.5x)
+    float phase1 = lerp(phase0, 0.25, 0.5);  // Blend toward isotropic
+    float atten1 = pow(transmittance, 0.5);   // Reduced absorption
+    totalLight += sunColor * phase1 * atten1 * 0.4;
+
+    // Octave 2: Tertiary scattering - nearly isotropic, ambient glow
+    float phase2 = 0.25;  // Isotropic (1/4π normalized)
+    float atten2 = pow(transmittance, 0.25);  // Very reduced absorption
+    totalLight += sunColor * phase2 * atten2 * 0.2;
+
+    // Silver lining effect - bright edges when backlit
+    float silverLining = pow(saturate(-cosTheta), 3.0) * transmittance;
+    totalLight += sunColor * silverLining * 0.5;
+
+    return totalLight;
 }
 
 // =============================================================================
@@ -443,18 +479,24 @@ CloudOutput renderVolumetricClouds(float3 rayOrigin, float3 rayDir, float3 sunDi
 
             // Light sampling with LOD - reduce steps at distance
             int lightSteps = int(lerp(float(CLOUD_LIGHT_MARCH_STEPS), max(2.0, float(CLOUD_LIGHT_MARCH_STEPS) * 0.5), distanceLOD));
-            float lightTransmittance = sampleLightTransmittance(currentPos, sunDir, time, lightSteps);
 
-            // Beer-Powder for scattered light
+            // Multi-scattering light energy (Hillaire/Frostbite)
+            float3 lightEnergy = sampleLightEnergy(currentPos, sunDir, sunColor, time, cosTheta, density, lightSteps);
+
+            // Beer-Powder for scattered light amount
             float scatterAmount = beerPowder(density * stepSize, cosTheta);
 
-            // Combine lighting
-            float3 lightColor = sunColor * lightTransmittance * phase;
-            float3 scatteredLight = (lightColor + ambientColor) * scatterAmount;
+            // Combine multi-scattering light with ambient
+            float3 scatteredLight = (lightEnergy + ambientColor) * scatterAmount;
 
-            // Powder effect for dark edges
+            // Powder effect for dark edges (looking away from sun)
             float powder = 1.0 - exp(-density * stepSize * 2.0);
             scatteredLight *= lerp(1.0, powder, CLOUD_POWDER_STRENGTH);
+
+            // Translucency - warm color shift for deep light penetration
+            float depth = density * stepSize * 10.0;
+            float3 warmShift = lerp(float3(1.0, 1.0, 1.0), float3(1.0, 0.9, 0.7), saturate(depth));
+            scatteredLight *= warmShift;
 
             // Accumulate
             float transmittance = beerLambert(density * stepSize * CLOUD_SCATTERING_COEFFICIENT);
@@ -528,27 +570,30 @@ float3 renderCirrusClouds(float3 rayDir, float3 sunDir, float3 sunColor, float t
     if (rayDir.y <= 0.01)
         return 0.0;
 
-    // Project onto cirrus plane
+    // Project onto cirrus plane (2D, not volumetric)
     float t = (CIRRUS_HEIGHT - 0.0) / rayDir.y;
     float2 hitPos = rayDir.xz * t;
 
-    // Sample cirrus
+    // Sample cirrus - 2D texture-based sampling
     float density = sampleCirrusCloud(hitPos, time);
 
     if (density < 0.001)
         return 0.0;
 
-    // Simple lighting
+    // Simple lighting - white with sun tinting
     float cosTheta = dot(rayDir, sunDir);
     float phase = phaseMieHG(cosTheta, 0.5);
 
-    float3 color = sunColor * phase * density;
+    // Bright white base color with sun tinting
+    float3 cirrusColor = lerp(float3(1.0, 1.0, 1.0), sunColor, 0.3);
+    float3 color = cirrusColor * phase * density;
 
-    // Forward scattering
+    // Forward scattering for bright edges against sun
     float forwardScatter = pow(saturate(cosTheta), 8.0);
     color += sunColor * forwardScatter * density * 0.5;
 
-    return color;
+    // Apply cirrus opacity setting
+    return color * CIRRUS_OPACITY;
 }
 
 // =============================================================================
