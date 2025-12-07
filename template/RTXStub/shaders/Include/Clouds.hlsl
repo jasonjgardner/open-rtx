@@ -22,9 +22,8 @@
  */
 
 // =============================================================================
-// OpenRTX Volumetric Clouds
-// Implements real-time ray-marched volumetric clouds with multiple layers
-// Based on: "The Real-time Volumetric Cloudscapes of Horizon Zero Dawn"
+// OpenRTX Minecraft-Style Volumetric Clouds
+// Grid-based clouds matching Minecraft's blocky aesthetic with volumetric softening
 // =============================================================================
 
 #ifndef __OPENRTX_CLOUDS_HLSL__
@@ -33,354 +32,192 @@
 #include "Settings.hlsl"
 
 // =============================================================================
-// PHASE FUNCTIONS (use Sky.hlsl's phaseMieHG - already included via OpenRTX.hlsl)
+// MINECRAFT CLOUD CONSTANTS
 // =============================================================================
 
-// phaseMieHG is defined in Sky.hlsl which is included before Clouds.hlsl
+// Minecraft cloud cell size (12x12 blocks in XZ, 4 blocks thick)
+static const float CLOUD_CELL_SIZE = 12.0;
+static const float CLOUD_THICKNESS = 4.0;
+
+// Cloud layer Y position (Minecraft uses Y=192 in modern versions)
+static const float MC_CLOUD_HEIGHT = 192.0;
+
+// Edge softening radius (in blocks) - keeps clouds mostly blocky
+static const float CLOUD_SOFT_EDGE = 1.5;
 
 // =============================================================================
-// NOISE FUNCTIONS
+// HASH FUNCTIONS
 // =============================================================================
 
-// Hash functions for procedural noise
-float hashCloud(float3 p)
+// Integer hash for deterministic cloud pattern
+uint hashInt(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352dU;
+    x ^= x >> 15;
+    x *= 0x846ca68bU;
+    x ^= x >> 16;
+    return x;
+}
+
+// 2D cell hash - determines if a cloud cell exists
+float cellHash(int2 cell)
+{
+    uint h = hashInt(uint(cell.x) + hashInt(uint(cell.y) * 15731U));
+    return float(h) / float(0xFFFFFFFFU);
+}
+
+// Simple 3D hash for internal variation
+float hash3D(float3 p)
 {
     p = frac(p * 0.3183099 + 0.1);
     p *= 17.0;
     return frac(p.x * p.y * p.z * (p.x + p.y + p.z));
 }
 
-float hashCloud2(float2 p)
-{
-    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
-}
-
-// 3D Value noise
-float valueNoise3D(float3 p)
-{
-    float3 pi = floor(p);
-    float3 pf = frac(p);
-
-    // Smoothstep interpolation
-    float3 w = pf * pf * (3.0 - 2.0 * pf);
-
-    float n000 = hashCloud(pi + float3(0, 0, 0));
-    float n001 = hashCloud(pi + float3(0, 0, 1));
-    float n010 = hashCloud(pi + float3(0, 1, 0));
-    float n011 = hashCloud(pi + float3(0, 1, 1));
-    float n100 = hashCloud(pi + float3(1, 0, 0));
-    float n101 = hashCloud(pi + float3(1, 0, 1));
-    float n110 = hashCloud(pi + float3(1, 1, 0));
-    float n111 = hashCloud(pi + float3(1, 1, 1));
-
-    float n00 = lerp(n000, n100, w.x);
-    float n01 = lerp(n001, n101, w.x);
-    float n10 = lerp(n010, n110, w.x);
-    float n11 = lerp(n011, n111, w.x);
-
-    float n0 = lerp(n00, n10, w.y);
-    float n1 = lerp(n01, n11, w.y);
-
-    return lerp(n0, n1, w.z);
-}
-
-// Worley/Cellular noise for cloud detail
-float worleyNoise3D(float3 p)
-{
-    float3 pi = floor(p);
-    float3 pf = frac(p);
-
-    float minDist = 1.0;
-
-    for (int x = -1; x <= 1; x++)
-    {
-        for (int y = -1; y <= 1; y++)
-        {
-            for (int z = -1; z <= 1; z++)
-            {
-                float3 offset = float3(x, y, z);
-                float3 cellId = pi + offset;
-
-                float3 cellCenter = offset + float3(
-                    hashCloud(cellId),
-                    hashCloud(cellId + 100.0),
-                    hashCloud(cellId + 200.0));
-
-                float dist = length(cellCenter - pf);
-                minDist = min(minDist, dist);
-            }
-        }
-    }
-
-    return minDist;
-}
-
-// Fractal Brownian Motion
-float fbm(float3 p, int octaves)
-{
-    float value = 0.0;
-    float amplitude = 0.5;
-    float frequency = 1.0;
-
-    [loop]
-    for (int i = 0; i < octaves; i++)
-    {
-        value += amplitude * valueNoise3D(p * frequency);
-        amplitude *= 0.5;
-        frequency *= 2.0;
-    }
-
-    return value;
-}
-
-// Worley FBM for erosion
-float worleyFBM(float3 p, int octaves)
-{
-    float value = 0.0;
-    float amplitude = 0.5;
-    float frequency = 1.0;
-
-    [loop]
-    for (int i = 0; i < octaves; i++)
-    {
-        value += amplitude * (1.0 - worleyNoise3D(p * frequency));
-        amplitude *= 0.5;
-        frequency *= 2.0;
-    }
-
-    return value;
-}
-
 // =============================================================================
-// CLOUD DENSITY FUNCTIONS
+// MINECRAFT-STYLE CLOUD PATTERN
 // =============================================================================
 
-// Height-based density gradient for cumulus clouds
-float cloudHeightGradient(float height, float cloudType)
+// Check if a cell contains a cloud (mimics Minecraft's cloud pattern)
+bool hasCloud(int2 cell, float time)
 {
-    // cloudType: 0 = stratus, 0.5 = stratocumulus, 1 = cumulus
-    float4 gradientParams;
+    // Wind animation - shift cells over time
+    float2 windOffset = CLOUD_WIND_DIRECTION * CLOUD_WIND_SPEED * time * 0.01;
+    int2 shiftedCell = cell - int2(floor(windOffset));
 
-    // Stratus: flat, low
-    float4 stratusParams = float4(0.02, 0.05, 0.1, 0.3);
-    // Stratocumulus: puffy but wide
-    float4 stratocumulusParams = float4(0.0, 0.1, 0.3, 0.6);
-    // Cumulus: tall, puffy
-    float4 cumulusParams = float4(0.0, 0.1, 0.7, 1.0);
+    // Deterministic pattern based on cell position
+    float h = cellHash(shiftedCell);
 
-    gradientParams = lerp(lerp(stratusParams, stratocumulusParams, cloudType * 2.0),
-                          cumulusParams, saturate(cloudType * 2.0 - 1.0));
-
-    float gradient = smoothstep(gradientParams.x, gradientParams.y, height) *
-                     smoothstep(gradientParams.w, gradientParams.z, height);
-
-    return gradient;
+    // Cloud coverage threshold
+    return h < CLOUD_COVERAGE;
 }
 
-// Remap function
-float remap(float value, float low1, float high1, float low2, float high2)
+// Get soft density within a cloud cell (1.0 at center, 0.0 at edges)
+float getCloudCellDensity(float3 localPos, float cellSize, float thickness)
 {
-    return low2 + (value - low1) * (high2 - low2) / (high1 - low1);
+    // localPos is position within the cell (0 to cellSize in XZ, 0 to thickness in Y)
+
+    // Calculate distance from edges
+    float3 halfSize = float3(cellSize * 0.5, thickness * 0.5, cellSize * 0.5);
+    float3 center = halfSize;
+    float3 dist = abs(localPos - center);
+
+    // Soft edges only - keep interior solid
+    float3 edgeDist = halfSize - dist;
+
+    // Apply softening only near edges
+    float softX = saturate(edgeDist.x / CLOUD_SOFT_EDGE);
+    float softY = saturate(edgeDist.y / CLOUD_SOFT_EDGE);
+    float softZ = saturate(edgeDist.z / CLOUD_SOFT_EDGE);
+
+    // Smooth the edge falloff
+    softX = smoothstep(0.0, 1.0, softX);
+    softY = smoothstep(0.0, 1.0, softY);
+    softZ = smoothstep(0.0, 1.0, softZ);
+
+    return softX * softY * softZ;
 }
 
-// =============================================================================
-// DISTANCE-BASED LOD
-// =============================================================================
-
-// Calculate LOD level based on distance (0 = close/high detail, 1 = far/low detail)
-float calculateLOD(float distance, float maxDistance)
+// Sample cloud density at world position
+float sampleMinecraftCloudDensity(float3 worldPos, float time)
 {
-    return saturate(distance / maxDistance);
-}
+    // Check if within cloud layer height
+    float cloudBottom = MC_CLOUD_HEIGHT;
+    float cloudTop = MC_CLOUD_HEIGHT + CLOUD_THICKNESS;
 
-// Get octave count based on LOD
-int getOctavesForLOD(float lod, int maxOctaves, int minOctaves)
-{
-    return int(lerp(float(maxOctaves), float(minOctaves), lod));
-}
-
-// Sample cloud density at a point with distance-based LOD
-float sampleCloudDensityLOD(float3 worldPos, float time, bool detailed, float distanceFromCamera)
-{
-    // Convert world position to cloud space
-    float cloudThickness = CLOUD_MAX_HEIGHT - CLOUD_MIN_HEIGHT;
-    float heightFraction = (worldPos.y - CLOUD_MIN_HEIGHT) / cloudThickness;
-
-    // Early exit: check bounds first
-    if (heightFraction < 0.0 || heightFraction > 1.0)
+    if (worldPos.y < cloudBottom || worldPos.y > cloudTop)
         return 0.0;
 
-    // Calculate LOD based on distance
-    float lod = calculateLOD(distanceFromCamera, 10000.0);
+    // Apply wind offset to world position
+    float2 windOffset = CLOUD_WIND_DIRECTION * CLOUD_WIND_SPEED * time * 0.01;
+    float3 animatedPos = worldPos;
+    animatedPos.xz += windOffset;
 
-    // Wind animation
-    float2 windOffset = CLOUD_WIND_DIRECTION * CLOUD_WIND_SPEED * time;
-    float3 animatedPos = worldPos + float3(windOffset.x, 0.0, windOffset.y);
+    // Get cell coordinates
+    int2 cell = int2(floor(animatedPos.xz / CLOUD_CELL_SIZE));
 
-    // Base cloud shape - reduce octaves at distance
-    float3 baseCoords = animatedPos * 0.0003;
-    int baseOctaves = getOctavesForLOD(lod, 4, 2);
-    float baseNoise = fbm(baseCoords, baseOctaves);
-
-    // Coverage map (simplified - in production would use weather texture)
-    float2 coverageCoords = animatedPos.xz * 0.00005 + time * 0.001;
-    float coverage = valueNoise3D(float3(coverageCoords, time * 0.1));
-    coverage = smoothstep(0.3, 0.7, coverage) * CLOUD_COVERAGE + (1.0 - CLOUD_COVERAGE) * 0.5;
-
-    // Cloud type from coverage (simplified)
-    float cloudType = saturate(coverage * 2.0);
-
-    // Height gradient
-    float heightGradient = cloudHeightGradient(heightFraction, cloudType);
-
-    // Combine base shape
-    float baseDensity = remap(baseNoise, 1.0 - coverage, 1.0, 0.0, 1.0);
-    baseDensity *= heightGradient;
-    baseDensity = saturate(baseDensity);
-
-    // Early exit for low density
-    if (baseDensity < 0.01)
+    // Check if this cell has a cloud
+    if (!hasCloud(cell, 0.0))  // time=0 since we already applied wind to position
         return 0.0;
 
-    // Detail erosion - skip for distant clouds or light samples
-    if (detailed && baseDensity > 0.01 && lod < 0.7)
-    {
-        float3 detailCoords = animatedPos * 0.003;
+    // Get local position within cell
+    float3 localPos;
+    localPos.xz = fmod(animatedPos.xz, CLOUD_CELL_SIZE);
+    if (localPos.x < 0.0) localPos.x += CLOUD_CELL_SIZE;
+    if (localPos.z < 0.0) localPos.z += CLOUD_CELL_SIZE;
+    localPos.y = worldPos.y - cloudBottom;
 
-        // Reduce detail octaves at distance
-        int detailOctaves = getOctavesForLOD(lod, 3, 1);
-        float detailNoise = worleyFBM(detailCoords, detailOctaves);
-        float detailErosion = detailNoise * CLOUD_DETAIL_STRENGTH;
+    // Get density with soft edges
+    float density = getCloudCellDensity(localPos, CLOUD_CELL_SIZE, CLOUD_THICKNESS);
 
-        // Height-based detail
-        float detailModifier = lerp(detailErosion, 1.0 - detailErosion, saturate(heightFraction * 5.0));
-
-        baseDensity = remap(baseDensity, detailModifier, 1.0, 0.0, 1.0);
-        baseDensity = saturate(baseDensity);
-    }
-
-    return baseDensity * CLOUD_DENSITY * CLOUD_DENSITY_MULTIPLIER;
+    return density * CLOUD_DENSITY;
 }
 
-// Original function for backwards compatibility (uses default LOD)
-float sampleCloudDensity(float3 worldPos, float time, bool detailed)
+// =============================================================================
+// PHASE FUNCTIONS
+// =============================================================================
+
+// Henyey-Greenstein phase function
+float cloudPhaseHG(float cosTheta, float g)
 {
-    return sampleCloudDensityLOD(worldPos, time, detailed, 0.0);
+    float g2 = g * g;
+    float denom = 1.0 + g2 - 2.0 * g * cosTheta;
+    return (1.0 - g2) / (4.0 * 3.14159265 * pow(max(denom, 0.0001), 1.5));
 }
 
-// =============================================================================
-// PHASE FUNCTIONS FOR CLOUDS
-// =============================================================================
-
-// Dual-lobe Henyey-Greenstein phase function
+// Dual-lobe phase function for clouds
 float cloudPhaseFunction(float cosTheta)
 {
-    float g1 = CLOUD_PHASE_G1;
-    float g2 = CLOUD_PHASE_G2;
-    float blend = CLOUD_PHASE_BLEND;
-
-    float phase1 = phaseMieHG(cosTheta, g1);
-    float phase2 = phaseMieHG(cosTheta, g2);
-
-    return lerp(phase2, phase1, blend);
+    float forward = cloudPhaseHG(cosTheta, 0.8);   // Strong forward scattering
+    float back = cloudPhaseHG(cosTheta, -0.3);     // Weak back scattering
+    return lerp(back, forward, 0.7);
 }
 
 // =============================================================================
-// LIGHTING FUNCTIONS
+// LIGHTING
 // =============================================================================
 
 // Beer-Lambert absorption
-float beerLambert(float density)
+float beerLambert(float opticalDepth)
 {
-    return exp(-density);
+    return exp(-opticalDepth);
 }
 
-// Beer-Powder function for dark edges
-float beerPowder(float density, float cosTheta)
-{
-    float beer = beerLambert(density);
-    float powder = 1.0 - exp(-density * 2.0);
-
-    // Mix based on angle to sun
-    float depthProbability = lerp(powder, 1.0, saturate(cosTheta * 0.5 + 0.5));
-
-    // Reduced multiplier for more realistic scattering (was 2.0)
-    return beer * depthProbability * 1.0;
-}
-
-// Sample light transmittance through cloud (cone sample)
+// Sample light transmittance toward sun
 float sampleLightTransmittance(float3 pos, float3 lightDir, float time, int numSamples)
 {
-    float stepSize = (CLOUD_MAX_HEIGHT - pos.y) / float(numSamples);
-    float density = 0.0;
+    float cloudTop = MC_CLOUD_HEIGHT + CLOUD_THICKNESS;
+    float maxDist = (cloudTop - pos.y) / max(lightDir.y, 0.001);
+    maxDist = min(maxDist, CLOUD_CELL_SIZE * 3.0);  // Limit sample distance
 
-    float3 currentPos = pos;
+    float stepSize = maxDist / float(numSamples);
+    float density = 0.0;
+    float3 samplePos = pos;
 
     [loop]
     for (int i = 0; i < numSamples; i++)
     {
-        currentPos += lightDir * stepSize;
-
-        // Add some cone spread for softer shadows
-        float3 offset = float3(
-            hashCloud(currentPos + float(i)) - 0.5,
-            0.0,
-            hashCloud(currentPos + float(i) + 100.0) - 0.5) * stepSize * 0.5;
-
-        density += sampleCloudDensity(currentPos + offset, time, false) * stepSize;
+        samplePos += lightDir * stepSize;
+        density += sampleMinecraftCloudDensity(samplePos, time) * stepSize;
     }
 
     return beerLambert(density * CLOUD_SCATTERING_COEFFICIENT);
 }
 
-// Multi-scattering light energy (Hillaire/Frostbite approach)
-// Returns accumulated light from multiple scattering octaves
-float3 sampleLightEnergy(float3 pos, float3 lightDir, float3 sunColor, float time,
-                         float cosTheta, float density, int numSamples)
-{
-    float transmittance = sampleLightTransmittance(pos, lightDir, time, numSamples);
-
-    float3 totalLight = 0.0;
-
-    // Multi-scattering octaves (Hillaire/Frostbite)
-    // Each octave: wider phase, reduced absorption, accumulated contribution
-    float sigmaS = CLOUD_SCATTERING_COEFFICIENT;
-    float sigmaE = sigmaS * 1.1;  // Extinction slightly higher than scattering
-
-    // Octave 0: Direct light with sharp phase function
-    float phase0 = cloudPhaseFunction(cosTheta);
-    float atten0 = transmittance;
-    totalLight += sunColor * phase0 * atten0;
-
-    // Octave 1: Secondary scattering - wider phase, reduced absorption (0.5x)
-    float phase1 = lerp(phase0, 0.25, 0.5);  // Blend toward isotropic
-    float atten1 = pow(transmittance, 0.5);   // Reduced absorption
-    totalLight += sunColor * phase1 * atten1 * 0.4;
-
-    // Octave 2: Tertiary scattering - nearly isotropic, ambient glow
-    float phase2 = 0.25;  // Isotropic (1/4π normalized)
-    float atten2 = pow(transmittance, 0.25);  // Very reduced absorption
-    totalLight += sunColor * phase2 * atten2 * 0.2;
-
-    // Silver lining effect - bright edges when backlit
-    float silverLining = pow(saturate(-cosTheta), 3.0) * transmittance;
-    totalLight += sunColor * silverLining * 0.5;
-
-    return totalLight;
-}
-
 // =============================================================================
-// RAY-CLOUD INTERSECTION
+// RAY-BOX INTERSECTION
 // =============================================================================
 
-// Get intersection with cloud layer
+// Intersect ray with cloud layer bounds
 float2 rayCloudLayerIntersect(float3 rayOrigin, float3 rayDir)
 {
-    // Intersect with two horizontal planes
-    float tMin = (CLOUD_MIN_HEIGHT - rayOrigin.y) / rayDir.y;
-    float tMax = (CLOUD_MAX_HEIGHT - rayOrigin.y) / rayDir.y;
+    float cloudBottom = MC_CLOUD_HEIGHT;
+    float cloudTop = MC_CLOUD_HEIGHT + CLOUD_THICKNESS;
 
-    // Sort
+    float tMin = (cloudBottom - rayOrigin.y) / rayDir.y;
+    float tMax = (cloudTop - rayOrigin.y) / rayDir.y;
+
     if (tMin > tMax)
     {
         float temp = tMin;
@@ -388,7 +225,6 @@ float2 rayCloudLayerIntersect(float3 rayOrigin, float3 rayDir)
         tMax = temp;
     }
 
-    // Clamp to positive
     tMin = max(0.0, tMin);
     tMax = max(0.0, tMax);
 
@@ -413,156 +249,123 @@ CloudOutput renderVolumetricClouds(float3 rayOrigin, float3 rayDir, float3 sunDi
     output.transmittance = 1.0;
     output.depth = maxDistance;
 
-    // Check if clouds are enabled
 #if !ENABLE_VOLUMETRIC_CLOUDS
     return output;
 #endif
 
-    // Get intersection with cloud layer
+    // Intersect with cloud layer
     float2 intersection = rayCloudLayerIntersect(rayOrigin, rayDir);
     float tMin = intersection.x;
     float tMax = min(intersection.y, maxDistance);
 
-    // Early exit: no intersection
-    if (tMax <= tMin)
+    if (tMax <= tMin || tMin > 20000.0)
         return output;
 
-    // Ray marching parameters with distance-based LOD
+    // Ray march parameters - fewer steps since clouds are blocky
     float rayLength = tMax - tMin;
-    float distanceLOD = calculateLOD(tMin, 8000.0);
+    int numSteps = min(CLOUD_MARCH_STEPS, int(rayLength / 2.0) + 8);
+    float stepSize = rayLength / float(numSteps);
 
-    // Reduce steps at distance for performance
-    int numSteps = int(lerp(float(CLOUD_MARCH_STEPS), float(CLOUD_MARCH_STEPS) * 0.5, distanceLOD));
-    float baseStepSize = rayLength / float(numSteps);
-
-    // Blue noise-style jitter using interleaved gradient noise
-    // Better quality than simple hash, reduces banding more effectively
+    // Jitter to reduce banding
     float2 jitterSeed = rayDir.xz * 1000.0 + time * 10.0;
     float jitter = frac(52.9829189 * frac(dot(jitterSeed, float2(0.06711056, 0.00583715))));
-    float jitterOffset = jitter * baseStepSize;
 
     // Phase function
     float cosTheta = dot(rayDir, sunDir);
     float phase = cloudPhaseFunction(cosTheta);
 
-    // Time-of-day scaling for ambient to prevent bright clouds at night
+    // Time of day scaling
     float dayFactor = saturate(sunDir.y * 2.0 + 0.5);
-    float sunBrightness = dot(sunColor, float3(0.299, 0.587, 0.114));
-    float timeOfDayScale = max(0.02, dayFactor * saturate(sunBrightness * 0.5 + 0.5));
+    float timeScale = max(0.05, dayFactor);
 
-    // Ambient light (from sky, scaled by time of day)
-    float3 ambientColor = sunColor * 0.15 * timeOfDayScale;
+    // Ambient from sky
+    float3 ambientColor = sunColor * 0.2 * timeScale;
 
-    // March through cloud layer (with jitter offset to reduce banding)
-    float startT = tMin + jitterOffset;
-    float3 currentPos = rayOrigin + rayDir * startT;
-    float currentT = startT;
-    float accumulatedAlpha = 0.0;
+    // March through cloud layer
+    float3 currentPos = rayOrigin + rayDir * (tMin + jitter * stepSize);
+    float currentT = tMin;
 
+    [loop]
     for (int i = 0; i < numSteps; i++)
     {
-        // Early exit: cloud is opaque enough
-        if (output.transmittance < 0.01 || accumulatedAlpha > 0.95)
+        if (output.transmittance < 0.01)
             break;
 
-        // Adaptive step size based on density
-        float stepSize = baseStepSize;
-
-        // Sample cloud density with distance-based LOD
-        float density = sampleCloudDensityLOD(currentPos, time, true, currentT);
+        float density = sampleMinecraftCloudDensity(currentPos, time);
 
         if (density > 0.001)
         {
-            // Record first hit depth
+            // Record first hit
             if (output.depth >= maxDistance)
                 output.depth = currentT;
 
-            // Light sampling with LOD - reduce steps at distance
-            int lightSteps = int(lerp(float(CLOUD_LIGHT_MARCH_STEPS), max(2.0, float(CLOUD_LIGHT_MARCH_STEPS) * 0.5), distanceLOD));
+            // Light sampling
+            float lightTrans = sampleLightTransmittance(currentPos, sunDir, time, CLOUD_LIGHT_MARCH_STEPS);
 
-            // Multi-scattering light energy (Hillaire/Frostbite)
-            float3 lightEnergy = sampleLightEnergy(currentPos, sunDir, sunColor, time, cosTheta, density, lightSteps);
+            // Direct + scattered light
+            float3 directLight = sunColor * phase * lightTrans;
 
-            // Beer-Powder for scattered light amount
-            float scatterAmount = beerPowder(density * stepSize, cosTheta);
+            // Multi-scatter approximation
+            float3 scatterLight = sunColor * 0.25 * pow(lightTrans, 0.3) * 0.4;
 
-            // Combine multi-scattering light with ambient
-            float3 scatteredLight = (lightEnergy + ambientColor) * scatterAmount;
+            // Silver lining when backlit
+            float silverLining = pow(saturate(-cosTheta), 4.0) * lightTrans * 0.3;
 
-            // Powder effect for dark edges (looking away from sun)
-            float powder = 1.0 - exp(-density * stepSize * 2.0);
-            scatteredLight *= lerp(1.0, powder, CLOUD_POWDER_STRENGTH);
-
-            // Translucency - warm color shift for deep light penetration
-            float depth = density * stepSize * 10.0;
-            float3 warmShift = lerp(float3(1.0, 1.0, 1.0), float3(1.0, 0.9, 0.7), saturate(depth));
-            scatteredLight *= warmShift;
+            float3 totalLight = directLight + scatterLight + ambientColor + sunColor * silverLining;
 
             // Accumulate
-            float transmittance = beerLambert(density * stepSize * CLOUD_SCATTERING_COEFFICIENT);
-            output.color += scatteredLight * output.transmittance;
+            float absorption = density * stepSize * CLOUD_SCATTERING_COEFFICIENT;
+            float transmittance = beerLambert(absorption);
+
+            output.color += totalLight * (1.0 - transmittance) * output.transmittance;
             output.transmittance *= transmittance;
-
-            // Track accumulated alpha for early exit
-            accumulatedAlpha = 1.0 - output.transmittance;
-
-            // Smaller steps in dense regions
-            stepSize *= lerp(1.0, 0.5, density);
-        }
-        else
-        {
-            // Larger steps in empty regions - more aggressive skip
-            stepSize *= 2.5;
         }
 
-        // Advance
-        stepSize = clamp(stepSize, baseStepSize * 0.25, baseStepSize * 4.0);
         currentT += stepSize;
         currentPos += rayDir * stepSize;
 
-        // Early exit: past cloud layer
         if (currentT > tMax)
             break;
     }
-
-    // Apply distance fog to far clouds for smoother horizon blending
-    float fogDistance = output.depth;
-    float fogFactor = saturate(fogDistance / 6000.0);  // Fog starts at ~6000 blocks
-    fogFactor = fogFactor * fogFactor;  // Quadratic falloff for smoother transition
-
-    // Fade clouds toward sky color at distance
-    float3 fogColor = sunColor * timeOfDayScale * 0.5;  // Match approximate sky brightness
-    output.color = lerp(output.color, fogColor * (1.0 - output.transmittance), fogFactor);
 
     return output;
 }
 
 // =============================================================================
-// CIRRUS CLOUD LAYER
+// CLOUD SHADOWS
 // =============================================================================
 
-float sampleCirrusCloud(float2 uv, float time)
+float sampleCloudShadow(float3 worldPos, float3 sunDir, float time)
 {
-    // Animated coordinates
-    float2 animUV = uv + CLOUD_WIND_DIRECTION * time * 0.0001;
+    // Project to cloud layer
+    float tToCloud = (MC_CLOUD_HEIGHT - worldPos.y) / max(0.001, sunDir.y);
 
-    // Multi-layer noise
-    float cirrus = 0.0;
-    float amplitude = 0.5;
-    float frequency = 1.0;
+    if (tToCloud < 0.0)
+        return 1.0;
 
-    for (int i = 0; i < 3; i++)
-    {
-        float2 sampleUV = animUV * frequency * 0.0001;
-        cirrus += amplitude * valueNoise3D(float3(sampleUV, float(i) * 0.5));
-        amplitude *= 0.5;
-        frequency *= 2.0;
-    }
+    float3 cloudPos = worldPos + sunDir * tToCloud;
+    float density = sampleMinecraftCloudDensity(cloudPos, time);
 
-    // Sharp threshold
-    cirrus = smoothstep(0.4, 0.6, cirrus);
+    return 1.0 - saturate(density * 5.0);
+}
 
-    return cirrus * 0.3; // Thin cirrus
+// =============================================================================
+// CIRRUS CLOUDS (High-altitude wispy layer - 2D, not volumetric)
+// =============================================================================
+
+// Simple 2D noise for cirrus
+float cirrusNoise2D(float2 p)
+{
+    float2 pi = floor(p);
+    float2 pf = frac(p);
+    float2 w = pf * pf * (3.0 - 2.0 * pf);
+
+    float n00 = hash3D(float3(pi, 0.0));
+    float n01 = hash3D(float3(pi + float2(0, 1), 0.0));
+    float n10 = hash3D(float3(pi + float2(1, 0), 0.0));
+    float n11 = hash3D(float3(pi + float2(1, 1), 0.0));
+
+    return lerp(lerp(n00, n10, w.x), lerp(n01, n11, w.x), w.y);
 }
 
 float3 renderCirrusClouds(float3 rayDir, float3 sunDir, float3 sunColor, float time)
@@ -570,52 +373,33 @@ float3 renderCirrusClouds(float3 rayDir, float3 sunDir, float3 sunColor, float t
     if (rayDir.y <= 0.01)
         return 0.0;
 
-    // Project onto cirrus plane (2D, not volumetric)
-    float t = (CIRRUS_HEIGHT - 0.0) / rayDir.y;
+    // Project onto high-altitude cirrus plane
+    float cirrusHeight = 400.0;  // High above blocky clouds
+    float t = cirrusHeight / rayDir.y;
     float2 hitPos = rayDir.xz * t;
 
-    // Sample cirrus - 2D texture-based sampling
-    float density = sampleCirrusCloud(hitPos, time);
+    // Animate with wind
+    float2 animUV = hitPos * 0.0002 + CLOUD_WIND_DIRECTION * time * 0.001;
+
+    // Multi-octave noise for wispy pattern
+    float density = 0.0;
+    density += cirrusNoise2D(animUV * 1.0) * 0.5;
+    density += cirrusNoise2D(animUV * 2.0 + 100.0) * 0.25;
+    density += cirrusNoise2D(animUV * 4.0 + 200.0) * 0.125;
+
+    // Threshold for wispy appearance
+    density = smoothstep(0.35, 0.65, density) * 0.3;
 
     if (density < 0.001)
         return 0.0;
 
-    // Simple lighting - white with sun tinting
+    // Simple lighting
     float cosTheta = dot(rayDir, sunDir);
-    float phase = phaseMieHG(cosTheta, 0.5);
+    float phase = cloudPhaseHG(cosTheta, 0.5);
 
-    // Bright white base color with sun tinting
     float3 cirrusColor = lerp(float3(1.0, 1.0, 1.0), sunColor, 0.3);
-    float3 color = cirrusColor * phase * density;
 
-    // Forward scattering for bright edges against sun
-    float forwardScatter = pow(saturate(cosTheta), 8.0);
-    color += sunColor * forwardScatter * density * 0.5;
-
-    // Apply cirrus opacity setting
-    return color * CIRRUS_OPACITY;
-}
-
-// =============================================================================
-// CLOUD SHADOWS
-// =============================================================================
-
-// Sample cloud shadow at a world position
-float sampleCloudShadow(float3 worldPos, float3 sunDir, float time)
-{
-    // Project position up to cloud layer along sun direction
-    float tToCloud = (CLOUD_MIN_HEIGHT - worldPos.y) / max(0.001, sunDir.y);
-
-    if (tToCloud < 0.0)
-        return 1.0; // Above clouds
-
-    float3 cloudSamplePos = worldPos + sunDir * tToCloud;
-
-    // Sample cloud density
-    float density = sampleCloudDensity(cloudSamplePos, time, false);
-
-    // Soft shadow
-    return 1.0 - saturate(density * 10.0);
+    return cirrusColor * phase * density * CIRRUS_OPACITY;
 }
 
 #endif // __OPENRTX_CLOUDS_HLSL__
