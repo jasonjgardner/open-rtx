@@ -21,7 +21,6 @@ on:
   workflow_dispatch:
 
 env:
-  VANILLA_BASE_URL: https://cdn.bedrock.graphics/vanilla/v23
   VANILLA_VERSION: v23
   DXC_VERSION: "1.8.2505.1"
 
@@ -33,6 +32,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Mask secrets
+        shell: pwsh
+        run: |
+          Write-Host "::add-mask::${{ secrets.VANILLA_BASE_URL }}"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -54,14 +58,16 @@ jobs:
       - name: Download vanilla material.bin files
         if: steps.cache-vanilla.outputs.cache-hit != 'true'
         shell: pwsh
+        env:
+          VANILLA_URL: ${{ secrets.VANILLA_BASE_URL }}
         run: |
           New-Item -ItemType Directory -Force -Path vanilla
-          Write-Host "Downloading RTXStub.material.bin..."
-          Invoke-WebRequest -Uri "${{ env.VANILLA_BASE_URL }}/RTXStub.material.bin" -OutFile "vanilla/RTXStub.material.bin"
-          Write-Host "Downloading RTXPostFX.Tonemapping.material.bin..."
-          Invoke-WebRequest -Uri "${{ env.VANILLA_BASE_URL }}/RTXPostFX.Tonemapping.material.bin" -OutFile "vanilla/RTXPostFX.Tonemapping.material.bin"
-          Write-Host "Downloading RTXPostFX.Bloom.material.bin..."
-          Invoke-WebRequest -Uri "${{ env.VANILLA_BASE_URL }}/RTXPostFX.Bloom.material.bin" -OutFile "vanilla/RTXPostFX.Bloom.material.bin"
+          Write-Host "Downloading vanilla materials..."
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri "$env:VANILLA_URL/RTXStub.material.bin" -OutFile "vanilla/RTXStub.material.bin"
+          Invoke-WebRequest -Uri "$env:VANILLA_URL/RTXPostFX.Tonemapping.material.bin" -OutFile "vanilla/RTXPostFX.Tonemapping.material.bin"
+          Invoke-WebRequest -Uri "$env:VANILLA_URL/RTXPostFX.Bloom.material.bin" -OutFile "vanilla/RTXPostFX.Bloom.material.bin"
+          Write-Host "Downloaded vanilla materials:"
           Get-ChildItem vanilla/
 
       - name: Verify vanilla materials
@@ -81,12 +87,12 @@ jobs:
         if: steps.cache-dxc.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          Write-Host "Downloading DXC v${{ env.DXC_VERSION }}..."
+          Write-Host "Downloading DXC..."
+          $ProgressPreference = 'SilentlyContinue'
           Invoke-WebRequest -Uri "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v${{ env.DXC_VERSION }}/dxc_2025_07_14.zip" -OutFile "dxc.zip"
           Expand-Archive -Path "dxc.zip" -DestinationPath "dxc" -Force
           Remove-Item "dxc.zip"
-          Write-Host "DXC contents:"
-          Get-ChildItem dxc/ -Recurse | Where-Object { $_.Name -match "dxc|dxcompiler|dxil" }
+          Write-Host "DXC installed"
 
       - name: Cache shaderc
         id: cache-shaderc
@@ -100,27 +106,33 @@ jobs:
         shell: pwsh
         run: |
           Write-Host "Downloading shaderc..."
+          $ProgressPreference = 'SilentlyContinue'
           Invoke-WebRequest -Uri "https://github.com/veka0/bgfx-mcbe/releases/download/binaries/shaderc-win-x64.zip" -OutFile "shaderc.zip"
           Expand-Archive -Path "shaderc.zip" -DestinationPath "." -Force
           Remove-Item "shaderc.zip"
           if (Test-Path "shadercRelease.exe") {
             Rename-Item "shadercRelease.exe" "shaderc.exe"
           }
-          Get-ChildItem shaderc*
+          Write-Host "Shaderc installed"
 
       - name: Verify compiler installations
         shell: pwsh
         run: |
           Write-Host "=== DXC ==="
           $dxcPath = "$PWD\dxc\bin\x64\dxc.exe"
-          Write-Host "DXC path: $dxcPath"
-          Write-Host "DXC bin/x64 contents:"
-          Get-ChildItem "$PWD\dxc\bin\x64\"
-          & $dxcPath --version
+          if (Test-Path $dxcPath) {
+            & $dxcPath --version
+          } else {
+            Write-Host "DXC not found at expected path"
+            Get-ChildItem dxc/ -Recurse -Filter "dxc.exe"
+          }
           Write-Host ""
           Write-Host "=== Shaderc ==="
-          Write-Host "Shaderc path: $PWD\shaderc.exe"
-          & "$PWD\shaderc.exe" --help 2>&1 | Select-Object -First 10
+          if (Test-Path "$PWD\shaderc.exe") {
+            & "$PWD\shaderc.exe" --help 2>&1 | Select-Object -First 5
+          } else {
+            Write-Host "Shaderc not found"
+          }
 
       - name: Run template generation script
         shell: pwsh
@@ -138,22 +150,23 @@ jobs:
           $dxcPath = "$PWD\dxc\bin\x64\dxc.exe"
           $shadercPath = "$PWD\shaderc.exe"
 
-          Write-Host "=== LAZURITE BUILD ===" | Tee-Object -FilePath build/build.log
-          Write-Host "DXC path: $dxcPath" | Tee-Object -FilePath build/build.log -Append
-          Write-Host "Shaderc path: $shadercPath" | Tee-Object -FilePath build/build.log -Append
-          Write-Host "" | Tee-Object -FilePath build/build.log -Append
-          Write-Host "Vanilla materials:" | Tee-Object -FilePath build/build.log -Append
-          Get-ChildItem vanilla/ | Tee-Object -FilePath build/build.log -Append
-          Write-Host "" | Tee-Object -FilePath build/build.log -Append
-          Write-Host "Running build command..." | Tee-Object -FilePath build/build.log -Append
+          Write-Host "=== LAZURITE BUILD ==="
+          Write-Host "Running build command..."
 
-          lazurite build project/ -o build/ --shaderc $shadercPath --dxc $dxcPath 2>&1 | Tee-Object -FilePath build/build.log -Append
+          # Run lazurite build and capture output
+          $output = lazurite build project/ -o build/ --shaderc $shadercPath --dxc $dxcPath 2>&1
           $buildStatus = $LASTEXITCODE
 
-          Write-Host "" | Tee-Object -FilePath build/build.log -Append
-          Write-Host "=== BUILD RESULT (exit code: $buildStatus) ===" | Tee-Object -FilePath build/build.log -Append
-          Write-Host "Build directory contents:" | Tee-Object -FilePath build/build.log -Append
-          Get-ChildItem build/ | Tee-Object -FilePath build/build.log -Append
+          # Write output to log file (without URLs)
+          $output | Out-File -FilePath build/build.log -Encoding utf8
+
+          # Display output
+          $output | ForEach-Object { Write-Host $_ }
+
+          Write-Host ""
+          Write-Host "=== BUILD RESULT (exit code: $buildStatus) ==="
+          Write-Host "Build directory contents:"
+          Get-ChildItem build/
 
           exit $buildStatus
 
