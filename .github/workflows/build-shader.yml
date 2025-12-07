@@ -23,7 +23,7 @@ on:
 env:
   VANILLA_VERSION: v23
   DXC_VERSION: "1.8.2505.1"
-  LAZURITE_VERSION: "0.5.1"
+  LAZURITE_VERSION: "0.7.0"
 
 jobs:
   build:
