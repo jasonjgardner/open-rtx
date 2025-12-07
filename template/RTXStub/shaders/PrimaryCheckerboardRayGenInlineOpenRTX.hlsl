@@ -123,10 +123,22 @@ ShadowResult traceShadowRay(float3 origin, float3 direction, float maxDist, Open
         {
             HitInfo hitInfo = GetCommittedHitInfo(shadowQuery);
             ObjectInstance objectInstance = objectInstances[hitInfo.objectInstanceIndex];
+
+            // Skip cloud geometry for shadow tests (vanilla mesh clouds)
+            if (objectInstance.flags & kObjectInstanceFlagClouds)
+            {
+                // Continue past clouds
+                shadowRay.Origin = shadowRay.Origin + shadowRay.Direction * (hitInfo.rayT + 0.001);
+                shadowRay.TMax -= hitInfo.rayT;
+                if (shadowRay.TMax <= 0.0)
+                    break;
+                continue;
+            }
+
             GeometryInfo geometryInfo = GetGeometryInfo(hitInfo, objectInstance);
             SurfaceInfo surfaceInfo = MaterialVanilla(hitInfo, geometryInfo, objectInstance);
 
-            // Check if opaque hit
+            // Check if opaque hit (but not clouds)
             if (hitInfo.materialType == MATERIAL_TYPE_OPAQUE ||
                 hitInfo.materialType == MATERIAL_TYPE_ALPHA_TEST)
             {
@@ -493,14 +505,15 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
     }
 #endif
 
-    float3 light = shadeSurfacePBR(surface, ctx);
+    // Get direct and ambient lighting separately
+    float3 directLight = shadeSurfaceDirectPBR(surface, ctx);
+    float3 ambientLight = shadeSurfaceAmbientPBR(surface, ctx);
 
-    // Apply shadow with color transmission
-    float3 shadowedLight = light * shadow.visibility * shadow.transmission;
-    float3 ambientLight = surface.albedo * ctx.constantAmbient * surface.ao;
+    // Apply shadow only to direct lighting, with color transmission
+    float3 shadowedDirect = directLight * shadow.visibility * shadow.transmission;
 
-    // Blend shadowed direct light with ambient
-    light = shadowedLight + ambientLight * (1.0 - shadow.visibility * 0.5);
+    // Combine: shadowed direct + unshadowed ambient
+    float3 light = shadowedDirect + ambientLight;
 #else
     // Vanilla-like shading
     float3 light = lerp(

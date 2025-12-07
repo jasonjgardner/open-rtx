@@ -217,9 +217,9 @@ struct EnhancedSurface
     float waterDepth;
 };
 
-// PBR shading with all enhancements
-// Uses game-provided lighting values for proper resource pack support
-float3 shadeSurfacePBR(EnhancedSurface surface, OpenRTXContext ctx)
+// PBR direct lighting only (for shadow application)
+// Returns ONLY direct sun/moon lighting, not ambient
+float3 shadeSurfaceDirectPBR(EnhancedSurface surface, OpenRTXContext ctx)
 {
     float3 result = 0.0;
 
@@ -270,13 +270,12 @@ float3 shadeSurfacePBR(EnhancedSurface surface, OpenRTXContext ctx)
             float3 specular = evaluateSpecularBRDF(f0, surface.roughness, NdotV, NdotL, NdotH, VdotH);
 
             // Sun light using game-provided color with reasonable intensity
-            // Scale to match vanilla brightness expectations (vanilla uses 0.45-1.0 range)
-            float3 sunLight = ctx.sunColor * dayFactor * 2.0;  // Multiplier ~2 for PBR response
+            float3 sunLight = ctx.sunColor * dayFactor * 2.0;
             result += (diffuse + specular) * sunLight * NdotL * surface.ao;
         }
     }
 
-    // Moon lighting (much dimmer)
+    // Moon lighting (much dimmer) - also direct lighting
     float nightFactor = 1.0 - dayFactor;
     if (nightFactor > 0.01)
     {
@@ -285,25 +284,44 @@ float3 shadeSurfacePBR(EnhancedSurface surface, OpenRTXContext ctx)
 
         if (NdotL > 0.0)
         {
-            // Use game moon intensity, scaled appropriately
             float3 moonLight = float3(0.6, 0.65, 0.8) * nightFactor * 0.3;
-
-            // Simplified shading for moonlight
             float3 diffuse = surface.albedo * (1.0 - surface.metalness) * kInvPi;
             result += diffuse * moonLight * NdotL * surface.ao;
         }
     }
 
-    // Ambient lighting from game
-    result += surface.albedo * ctx.constantAmbient * surface.ao;
+    return result;
+}
 
-    // Emissive (scaled reasonably)
+// Ambient/indirect lighting (never shadowed)
+float3 shadeSurfaceAmbientPBR(EnhancedSurface surface, OpenRTXContext ctx)
+{
+    float3 result = 0.0;
+
+    // Ambient lighting from game - ensure reasonable minimum
+    float3 ambient = ctx.constantAmbient;
+    ambient = max(ambient, 0.03);  // Minimum ambient to prevent pitch black
+
+    result += surface.albedo * ambient * surface.ao;
+
+    // Add slight sky contribution based on normal direction
+    float skyFactor = saturate(dot(surface.normal, float3(0, 1, 0)) * 0.5 + 0.5);
+    result += surface.albedo * ctx.gameSkyColor * 0.05 * skyFactor * surface.ao;
+
+    // Emissive (never shadowed)
     if (surface.emissive > 0.0)
     {
         result += surface.albedo * surface.emissive * 2.0;
     }
 
     return result;
+}
+
+// PBR shading with all enhancements (combined for backwards compatibility)
+// Uses game-provided lighting values for proper resource pack support
+float3 shadeSurfacePBR(EnhancedSurface surface, OpenRTXContext ctx)
+{
+    return shadeSurfaceDirectPBR(surface, ctx) + shadeSurfaceAmbientPBR(surface, ctx);
 }
 
 // =============================================================================
@@ -317,10 +335,14 @@ float3 renderSkyWithClouds(float3 rayDir, OpenRTXContext ctx)
     // Use game-provided sky gradient as the base (respects resource packs)
     float gradientT = saturate(rayDir.y * 0.5 + 0.5);
     float3 gameBaseSky = lerp(ctx.gameSkyColorDown, ctx.gameSkyColorUp, gradientT);
-    gameBaseSky *= ctx.skyIntensityAdjustment;
 
-    // Add constant ambient
+    // Apply sky intensity adjustment from game, with minimum brightness
+    float effectiveSkyIntensity = max(ctx.skyIntensityAdjustment, 0.5);
+    gameBaseSky *= effectiveSkyIntensity;
+
+    // Add constant ambient and ensure minimum sky brightness
     gameBaseSky += ctx.constantAmbient;
+    gameBaseSky = max(gameBaseSky, 0.05);  // Prevent completely black sky
 
 #if OPENRTX_ENABLED && ENABLE_ATMOSPHERIC_SKY
     // Enhanced atmospheric scattering (blended with game sky)
@@ -350,16 +372,23 @@ float3 renderSkyWithClouds(float3 rayDir, OpenRTXContext ctx)
 
 #if ENABLE_VOLUMETRIC_CLOUDS
     // Volumetric clouds
+    // Note: sunMeshIntensity from game is for visual sun disk, not lighting
+    // Use a reasonable HDR intensity for cloud illumination
+    float cloudSunIntensity = max(ctx.sunIntensity, 3.0) * saturate(ctx.sunDir.y * 4.0 + 1.0);
+    float3 cloudSunColor = ctx.sunColor * cloudSunIntensity;
+
     CloudOutput clouds = renderVolumetricClouds(
         ctx.viewOrigin,
         rayDir,
         ctx.sunDir,
-        ctx.sunColor * ctx.sunIntensity,
+        cloudSunColor,
         ctx.time,
         10000.0);
 
-    // Blend clouds with sky
-    skyColor = skyColor * clouds.transmittance + clouds.color;
+    // Blend clouds with sky - ensure minimum sky visibility
+    float minTransmittance = 0.15;  // Prevent completely dark sky
+    float effectiveTransmittance = max(clouds.transmittance, minTransmittance);
+    skyColor = skyColor * effectiveTransmittance + clouds.color;
 
     // Cirrus layer
     float3 cirrus = renderCirrusClouds(rayDir, ctx.sunDir, ctx.sunColor, ctx.time);
