@@ -88,6 +88,152 @@ struct ShadowResult
     float3 transmission;    // Color transmitted through translucent surfaces
 };
 
+// =============================================================================
+// GLASS REFRACTION HELPERS
+// =============================================================================
+
+// Calculate Fresnel reflectance for dielectric (glass) at given angle
+float glassFresnelReflectance(float cosTheta, float ior)
+{
+    // Use full Fresnel equations for accurate glass
+    float eta = 1.0 / ior;  // Air to glass
+    float sinThetaTSq = eta * eta * (1.0 - cosTheta * cosTheta);
+
+    // Total internal reflection check
+    if (sinThetaTSq > 1.0)
+        return 1.0;
+
+    float cosThetaT = sqrt(max(0.0, 1.0 - sinThetaTSq));
+
+    // Fresnel equations for s and p polarization
+    float rs = (eta * cosTheta - cosThetaT) / (eta * cosTheta + cosThetaT);
+    float rp = (cosTheta - eta * cosThetaT) / (cosTheta + eta * cosThetaT);
+
+    return (rs * rs + rp * rp) * 0.5;
+}
+
+// Calculate refracted direction through glass
+float3 glassRefract(float3 incident, float3 normal, float ior, out bool totalInternalReflection)
+{
+    float eta = 1.0 / ior;  // Air to glass ratio
+    float cosI = -dot(incident, normal);
+
+    // Check if we're inside the glass (ray exiting)
+    if (cosI < 0.0)
+    {
+        // Flip normal and use inverse ratio
+        normal = -normal;
+        cosI = -cosI;
+        eta = ior;  // Glass to air
+    }
+
+    float sinT2 = eta * eta * (1.0 - cosI * cosI);
+
+    // Total internal reflection
+    if (sinT2 > 1.0)
+    {
+        totalInternalReflection = true;
+        return reflect(incident, normal);
+    }
+
+    totalInternalReflection = false;
+    float cosT = sqrt(1.0 - sinT2);
+    return eta * incident + (eta * cosI - cosT) * normal;
+}
+
+// Trace refracted ray through glass and accumulate color
+float3 traceGlassRefraction(float3 origin, float3 direction, float3 normal,
+                            float3 glassColor, float glassAlpha, OpenRTXContext ctx,
+                            int maxBounces)
+{
+#if !ENABLE_GLASS_REFRACTION
+    return 0.0;
+#endif
+
+    float3 accumulatedColor = 0.0;
+    float3 throughput = 1.0;
+    float3 currentOrigin = origin;
+    float3 currentDir = direction;
+
+    // Trace through glass with multiple bounces for internal reflections
+    [loop]
+    for (int bounce = 0; bounce < maxBounces; bounce++)
+    {
+        RayQuery<RAY_FLAG_NONE> refractQuery;
+        RayDesc refractRay;
+        refractRay.Origin = currentOrigin + currentDir * 0.01;
+        refractRay.Direction = currentDir;
+        refractRay.TMin = 0.0;
+        refractRay.TMax = 1000.0;
+
+        refractQuery.TraceRayInline(SceneBVH, RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0xff, refractRay);
+
+        while (refractQuery.Proceed())
+        {
+            HitInfo hitInfo = GetCandidateHitInfo(refractQuery);
+            if (AlphaTestHitLogic(hitInfo))
+            {
+                refractQuery.CommitNonOpaqueTriangleHit();
+            }
+        }
+
+        if (refractQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+        {
+            HitInfo hitInfo = GetCommittedHitInfo(refractQuery);
+            ObjectInstance objectInstance = objectInstances[hitInfo.objectInstanceIndex];
+            GeometryInfo geometryInfo = GetGeometryInfo(hitInfo, objectInstance);
+            SurfaceInfo surfaceInfo = MaterialVanilla(hitInfo, geometryInfo, objectInstance);
+
+            // Apply glass color absorption based on distance traveled
+            float distance = hitInfo.rayT;
+            float3 absorption = exp(-glassColor * distance * GLASS_ABSORPTION_SCALE);
+            throughput *= absorption;
+
+            // Check if we hit another transparent surface (still in glass)
+            if (hitInfo.materialType != MATERIAL_TYPE_OPAQUE &&
+                hitInfo.materialType != MATERIAL_TYPE_ALPHA_TEST)
+            {
+                // Exiting glass or hitting another glass surface
+                bool tir;
+                float3 exitNormal = surfaceInfo.normal;
+
+                // If normal faces same direction as ray, we're exiting
+                if (dot(currentDir, exitNormal) > 0)
+                    exitNormal = -exitNormal;
+
+                currentDir = glassRefract(currentDir, exitNormal, GLASS_IOR, tir);
+                currentOrigin = surfaceInfo.position;
+
+                if (tir)
+                {
+                    // Total internal reflection - continue inside glass
+                    continue;
+                }
+                // Continue to next iteration with refracted ray
+                continue;
+            }
+
+            // Hit an opaque surface - shade it
+            float3 N = surfaceInfo.normal;
+            float NdotL = saturate(dot(N, ctx.sunDir));
+            float3 surfaceLight = surfaceInfo.color * ctx.sunColor * NdotL * 0.5;
+            surfaceLight += surfaceInfo.color * ctx.constantAmbient;
+            surfaceLight += surfaceInfo.color * surfaceInfo.emissive * EMISSIVE_INTENSITY;
+
+            accumulatedColor = throughput * surfaceLight;
+            return accumulatedColor;
+        }
+        else
+        {
+            // Hit sky through glass
+            accumulatedColor = throughput * renderSkyWithClouds(currentDir, ctx);
+            return accumulatedColor;
+        }
+    }
+
+    return accumulatedColor;
+}
+
 // Trace shadow ray with color transmission through translucent surfaces
 ShadowResult traceShadowRay(float3 origin, float3 direction, float maxDist, OpenRTXContext ctx)
 {
@@ -622,9 +768,66 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
     }
     else
     {
-        // Standard alpha blend
-        throughput = 1 - surfaceInfo.alpha;
-        emission = surfaceInfo.color * surfaceInfo.alpha * light;
+        // Glass/transparent surface with IOR-based Fresnel
+#if ENABLE_GLASS_REFRACTION
+        // Check if this is a glass-like transparent surface (high alpha = more solid glass)
+        bool isGlassLike = surfaceInfo.alpha > 0.1;
+
+        if (isGlassLike)
+        {
+            float3 viewDir = -rayState.rayDesc.Direction;
+            float3 N = surfaceInfo.normal;
+            float NdotV = abs(dot(N, viewDir));
+
+            // Calculate Fresnel reflectance using glass IOR
+            float fresnel = glassFresnelReflectance(NdotV, GLASS_IOR);
+
+            // Blend between reflection and transmission based on Fresnel
+            // Higher Fresnel = more reflection, less transmission
+            float reflectAmount = fresnel * surfaceInfo.alpha;
+            float transmitAmount = (1.0 - fresnel) * (1.0 - surfaceInfo.alpha * 0.5);
+
+            // Calculate refracted ray direction
+            bool tir;
+            float3 refractDir = glassRefract(rayState.rayDesc.Direction, N, GLASS_IOR, tir);
+
+            // If total internal reflection, treat as fully reflective
+            if (tir)
+            {
+                reflectAmount = surfaceInfo.alpha;
+                transmitAmount = 1.0 - surfaceInfo.alpha;
+            }
+
+            // Trace refracted ray to get what's behind the glass
+            float3 refractedColor = 0.0;
+            if (!tir && transmitAmount > 0.01)
+            {
+                refractedColor = traceGlassRefraction(
+                    surfaceInfo.position, refractDir, N,
+                    surfaceInfo.color, surfaceInfo.alpha, ctx,
+                    GLASS_MAX_BOUNCES);
+            }
+
+            // Glass surface gets some of the light for tinted effect
+            float3 glassEmission = surfaceInfo.color * surfaceInfo.alpha * light * (1.0 - fresnel);
+
+            // Combine: glass tint + refracted scene
+            emission = glassEmission + refractedColor * transmitAmount * rayState.throughput;
+
+            // Throughput for what passes through without refraction trace
+            // (for subsequent layers in the ray march)
+            throughput = transmitAmount * (1.0 - surfaceInfo.alpha * 0.3);
+
+            // Tint throughput by glass color for stained glass effect
+            throughput *= lerp(1.0, surfaceInfo.color, surfaceInfo.alpha * 0.5);
+        }
+        else
+#endif
+        {
+            // Standard alpha blend for very transparent surfaces
+            throughput = 1 - surfaceInfo.alpha;
+            emission = surfaceInfo.color * surfaceInfo.alpha * light;
+        }
     }
 
     // Glint effect

@@ -626,6 +626,45 @@
 #endif
 
 // =============================================================================
+// GLASS SETTINGS
+// =============================================================================
+
+// Index of Refraction for glass (real glass is 1.5-1.52)
+#ifndef GLASS_IOR
+#define GLASS_IOR 1.52
+#endif
+
+// Enable glass refraction ray tracing
+#ifndef ENABLE_GLASS_REFRACTION
+#define ENABLE_GLASS_REFRACTION 1
+#endif
+
+// Maximum refraction bounces through glass
+#ifndef GLASS_MAX_BOUNCES
+#define GLASS_MAX_BOUNCES 4
+#endif
+
+// Glass absorption color (tinted glass darkens light passing through)
+#ifndef GLASS_ABSORPTION_SCALE
+#define GLASS_ABSORPTION_SCALE 0.5  // How much color absorption per unit thickness
+#endif
+
+// Roughness for frosted glass effect (0 = clear, higher = frosted)
+#ifndef GLASS_ROUGHNESS
+#define GLASS_ROUGHNESS 0.0
+#endif
+
+// Enable chromatic dispersion (rainbow effects at edges)
+#ifndef ENABLE_GLASS_DISPERSION
+#define ENABLE_GLASS_DISPERSION 0  // Expensive, disabled by default
+#endif
+
+// Dispersion strength (IOR variation across wavelengths)
+#ifndef GLASS_DISPERSION_STRENGTH
+#define GLASS_DISPERSION_STRENGTH 0.02
+#endif
+
+// =============================================================================
 // CAUSTICS SETTINGS
 // =============================================================================
 
@@ -1160,8 +1199,8 @@ static const float cGravity = 9.80665;
 // Water refractive index
 static const float cWaterRefractiveIndex = 1.333;
 
-// Glass refractive index (approximate)
-static const float cGlassRefractiveIndex = 1.5;
+// Glass refractive index (uses GLASS_IOR setting)
+static const float cGlassRefractiveIndex = GLASS_IOR;
 
 // Air refractive index at sea level
 static const float cAirRefractiveIndex = 1.000293;
