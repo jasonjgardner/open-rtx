@@ -168,7 +168,7 @@ OpenRTXContext initContext(
 
     // Determine sun color based on elevation (fallback when game data unavailable)
     float sunElevation = sunDir.y;
-    float dayFactor = saturate(sunElevation * 4.0 + 0.5);
+    float dayFactor = saturate(sunElevation * 2.0 + 0.5);  // Smoother transition
 
     // Color temperature based on sun position
     float colorTemp = lerp(SUNRISE_COLOR_TEMPERATURE, SUN_COLOR_TEMPERATURE, saturate(sunElevation * 2.0));
@@ -217,6 +217,29 @@ struct EnhancedSurface
     float waterDepth;
 };
 
+// =============================================================================
+// TIME-OF-DAY HELPERS
+// =============================================================================
+
+// Calculate time-of-day lighting scale from sun position and color
+// Returns a value that smoothly transitions between day and night
+float getTimeOfDayScale(float3 sunDir, float3 sunColor)
+{
+    float sunBrightness = dot(sunColor, float3(0.299, 0.587, 0.114));
+    float dayFactor = saturate(sunDir.y * 2.0 + 0.5);  // Smoother transition
+    return max(0.02, dayFactor * saturate(sunBrightness * 0.5 + 0.5));
+}
+
+// Get raw day factor (0 = night, 1 = day) without brightness adjustment
+float getDayFactor(float3 sunDir)
+{
+    return saturate(sunDir.y * 2.0 + 0.5);
+}
+
+// =============================================================================
+// PBR SURFACE SHADING
+// =============================================================================
+
 // PBR direct lighting only (for shadow application)
 // Returns ONLY direct sun/moon lighting, not ambient
 float3 shadeSurfaceDirectPBR(EnhancedSurface surface, OpenRTXContext ctx)
@@ -229,9 +252,9 @@ float3 shadeSurfaceDirectPBR(EnhancedSurface surface, OpenRTXContext ctx)
     // Compute F0
     float3 f0 = computeF0(surface.albedo, surface.metalness, 1.5);
 
-    // Determine day/night factor from sun elevation
-    float sunElevation = ctx.sunDir.y;
-    float dayFactor = saturate(sunElevation * 4.0 + 0.5);
+    // Get time-of-day factors
+    float dayFactor = getDayFactor(ctx.sunDir);
+    float timeScale = getTimeOfDayScale(ctx.sunDir, ctx.sunColor);
 
     // Direct sun lighting
     {
@@ -269,8 +292,8 @@ float3 shadeSurfaceDirectPBR(EnhancedSurface surface, OpenRTXContext ctx)
             // Specular
             float3 specular = evaluateSpecularBRDF(f0, surface.roughness, NdotV, NdotL, NdotH, VdotH);
 
-            // Sun light using game-provided color with reasonable intensity
-            float3 sunLight = ctx.sunColor * dayFactor * 2.0;
+            // Sun light using game-provided color with time-of-day scaling
+            float3 sunLight = ctx.sunColor * timeScale * 3.0;  // Scale for PBR response
             result += (diffuse + specular) * sunLight * NdotL * surface.ao;
         }
     }
@@ -350,12 +373,11 @@ float3 renderSkyWithClouds(float3 rayDir, OpenRTXContext ctx)
 
     // Blend physical sky with game-provided colors
     // Use game colors as base, add atmospheric enhancement
-    float sunElevation = ctx.sunDir.y;
-    float dayFactor = saturate(sunElevation * 4.0 + 0.5);
+    float skyDayFactor = getDayFactor(ctx.sunDir);
 
     // During day: blend atmospheric scattering with game sky
     // During night: use game sky colors more directly
-    float atmosphericBlend = dayFactor * 0.5; // 50% atmospheric during day
+    float atmosphericBlend = skyDayFactor * 0.5; // 50% atmospheric during day
     skyColor = lerp(gameBaseSky, sky.color, atmosphericBlend);
 
     // Always add sun disk from physical model
@@ -372,9 +394,10 @@ float3 renderSkyWithClouds(float3 rayDir, OpenRTXContext ctx)
 
 #if ENABLE_VOLUMETRIC_CLOUDS
     // Volumetric clouds
-    // Use moderate intensity for cloud illumination - too high makes them blown out
-    float dayFactor = saturate(ctx.sunDir.y * 4.0 + 1.0);
-    float3 cloudSunColor = ctx.sunColor * dayFactor * 1.5;  // Moderate multiplier
+    // Use time-of-day aware intensity for cloud illumination
+    float cloudDayFactor = getDayFactor(ctx.sunDir);
+    float cloudTimeScale = getTimeOfDayScale(ctx.sunDir, ctx.sunColor);
+    float3 cloudSunColor = ctx.sunColor * cloudTimeScale * 2.0;  // Moderate multiplier
 
     CloudOutput clouds = renderVolumetricClouds(
         ctx.viewOrigin,
