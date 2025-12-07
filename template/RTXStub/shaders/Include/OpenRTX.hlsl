@@ -70,6 +70,13 @@ struct OpenRTXContext
     float sunIntensity;
     float moonIntensity;
 
+    // Game-provided sky colors (from resource packs)
+    float3 gameSkyColor;
+    float3 gameSkyColorUp;
+    float3 gameSkyColorDown;
+    float skyIntensityAdjustment;
+    float3 constantAmbient;
+
     // Weather
     float rainIntensity;
     float thunderIntensity;
@@ -83,6 +90,61 @@ struct OpenRTXContext
 };
 
 // Initialize context from game state
+// This version uses game-provided values from g_view for proper resource pack support
+OpenRTXContext initContextFromGame(
+    float3 viewOrigin,
+    float3 viewDir,
+    float2 screenUV,
+    float time,
+    float3 sunDir,
+    float3 gameSunColor,
+    float3 gameSkyColor,
+    float3 gameSkyColorUp,
+    float3 gameSkyColorDown,
+    float3 constantAmbient,
+    float skyIntensityAdjustment,
+    float sunMeshIntensity,
+    float moonMeshIntensity,
+    float rainIntensity,
+    int dimension)
+{
+    OpenRTXContext ctx;
+
+    ctx.viewOrigin = viewOrigin;
+    ctx.viewDir = viewDir;
+    ctx.screenUV = screenUV;
+    ctx.time = time;
+    ctx.deltaTime = 0.016; // Assume 60fps
+    ctx.frameIndex = uint(time * 60.0);
+
+    ctx.sunDir = sunDir;
+    ctx.moonDir = -sunDir;
+
+    // Use game-provided sun color (from resource pack)
+    ctx.sunColor = gameSunColor;
+    ctx.sunIntensity = sunMeshIntensity;
+    ctx.moonIntensity = moonMeshIntensity;
+
+    // Store game-provided sky colors
+    ctx.gameSkyColor = gameSkyColor;
+    ctx.gameSkyColorUp = gameSkyColorUp;
+    ctx.gameSkyColorDown = gameSkyColorDown;
+    ctx.skyIntensityAdjustment = skyIntensityAdjustment;
+    ctx.constantAmbient = constantAmbient;
+
+    ctx.rainIntensity = rainIntensity;
+    ctx.thunderIntensity = 0.0;
+
+    ctx.dimension = dimension;
+
+    // Default exposure
+    ctx.exposureEV = 0.0;
+    ctx.avgLuminance = 0.18;
+
+    return ctx;
+}
+
+// Legacy initialization (for backwards compatibility)
 OpenRTXContext initContext(
     float3 viewOrigin,
     float3 viewDir,
@@ -104,7 +166,7 @@ OpenRTXContext initContext(
     ctx.sunDir = sunDir;
     ctx.moonDir = -sunDir;
 
-    // Determine sun color based on elevation
+    // Determine sun color based on elevation (fallback when game data unavailable)
     float sunElevation = sunDir.y;
     float dayFactor = saturate(sunElevation * 4.0 + 0.5);
 
@@ -113,6 +175,13 @@ OpenRTXContext initContext(
     ctx.sunColor = blackbodyColor(colorTemp);
     ctx.sunIntensity = SUN_INTENSITY * dayFactor;
     ctx.moonIntensity = MOON_INTENSITY * (1.0 - dayFactor);
+
+    // Default sky colors (vanilla-like)
+    ctx.gameSkyColor = float3(0.5, 0.7, 1.0);
+    ctx.gameSkyColorUp = float3(0.4, 0.6, 0.9);
+    ctx.gameSkyColorDown = float3(0.7, 0.8, 1.0);
+    ctx.skyIntensityAdjustment = 1.0;
+    ctx.constantAmbient = float3(0.1, 0.1, 0.1);
 
     ctx.rainIntensity = rainIntensity;
     ctx.thunderIntensity = 0.0;
@@ -149,6 +218,7 @@ struct EnhancedSurface
 };
 
 // PBR shading with all enhancements
+// Uses game-provided lighting values for proper resource pack support
 float3 shadeSurfacePBR(EnhancedSurface surface, OpenRTXContext ctx)
 {
     float3 result = 0.0;
@@ -159,7 +229,11 @@ float3 shadeSurfacePBR(EnhancedSurface surface, OpenRTXContext ctx)
     // Compute F0
     float3 f0 = computeF0(surface.albedo, surface.metalness, 1.5);
 
-    // Direct sun/moon lighting
+    // Determine day/night factor from sun elevation
+    float sunElevation = ctx.sunDir.y;
+    float dayFactor = saturate(sunElevation * 4.0 + 0.5);
+
+    // Direct sun lighting
     {
         float3 L = ctx.sunDir;
         float3 H = normalize(V + L);
@@ -169,7 +243,7 @@ float3 shadeSurfacePBR(EnhancedSurface surface, OpenRTXContext ctx)
         float NdotH = saturate(dot(N, H));
         float VdotH = saturate(dot(V, H));
 
-        if (NdotL > 0.0)
+        if (NdotL > 0.0 && dayFactor > 0.01)
         {
             // Diffuse
             float3 diffuseAlbedo = surface.albedo * (1.0 - surface.metalness);
@@ -195,22 +269,24 @@ float3 shadeSurfacePBR(EnhancedSurface surface, OpenRTXContext ctx)
             // Specular
             float3 specular = evaluateSpecularBRDF(f0, surface.roughness, NdotV, NdotL, NdotH, VdotH);
 
-            // Combine
-            float3 sunLight = ctx.sunColor * ctx.sunIntensity;
+            // Sun light using game-provided color with reasonable intensity
+            // Scale to match vanilla brightness expectations (vanilla uses 0.45-1.0 range)
+            float3 sunLight = ctx.sunColor * dayFactor * 2.0;  // Multiplier ~2 for PBR response
             result += (diffuse + specular) * sunLight * NdotL * surface.ao;
         }
     }
 
     // Moon lighting (much dimmer)
-    if (ctx.moonIntensity > 0.01)
+    float nightFactor = 1.0 - dayFactor;
+    if (nightFactor > 0.01)
     {
         float3 L = ctx.moonDir;
         float NdotL = saturate(dot(N, L));
 
         if (NdotL > 0.0)
         {
-            float3 moonColor = blackbodyColor(MOON_COLOR_TEMPERATURE);
-            float3 moonLight = moonColor * ctx.moonIntensity;
+            // Use game moon intensity, scaled appropriately
+            float3 moonLight = float3(0.6, 0.65, 0.8) * nightFactor * 0.3;
 
             // Simplified shading for moonlight
             float3 diffuse = surface.albedo * (1.0 - surface.metalness) * kInvPi;
@@ -218,10 +294,13 @@ float3 shadeSurfacePBR(EnhancedSurface surface, OpenRTXContext ctx)
         }
     }
 
-    // Emissive
+    // Ambient lighting from game
+    result += surface.albedo * ctx.constantAmbient * surface.ao;
+
+    // Emissive (scaled reasonably)
     if (surface.emissive > 0.0)
     {
-        result += surface.albedo * surface.emissive * 10.0;
+        result += surface.albedo * surface.emissive * 2.0;
     }
 
     return result;
@@ -235,9 +314,39 @@ float3 renderSkyWithClouds(float3 rayDir, OpenRTXContext ctx)
 {
     float3 skyColor = 0.0;
 
-    // Atmospheric sky
+    // Use game-provided sky gradient as the base (respects resource packs)
+    float gradientT = saturate(rayDir.y * 0.5 + 0.5);
+    float3 gameBaseSky = lerp(ctx.gameSkyColorDown, ctx.gameSkyColorUp, gradientT);
+    gameBaseSky *= ctx.skyIntensityAdjustment;
+
+    // Add constant ambient
+    gameBaseSky += ctx.constantAmbient;
+
+#if OPENRTX_ENABLED && ENABLE_ATMOSPHERIC_SKY
+    // Enhanced atmospheric scattering (blended with game sky)
     SkyOutput sky = evaluateSky(rayDir, ctx.sunDir, ctx.moonDir, ctx.time, true);
-    skyColor = sky.color + sky.sunDiskColor;
+
+    // Blend physical sky with game-provided colors
+    // Use game colors as base, add atmospheric enhancement
+    float sunElevation = ctx.sunDir.y;
+    float dayFactor = saturate(sunElevation * 4.0 + 0.5);
+
+    // During day: blend atmospheric scattering with game sky
+    // During night: use game sky colors more directly
+    float atmosphericBlend = dayFactor * 0.5; // 50% atmospheric during day
+    skyColor = lerp(gameBaseSky, sky.color, atmosphericBlend);
+
+    // Always add sun disk from physical model
+    skyColor += sky.sunDiskColor;
+#else
+    // Use game-provided sky directly (vanilla-like)
+    skyColor = gameBaseSky;
+
+    // Simple sun glow
+    float sunCosAngle = dot(rayDir, ctx.sunDir);
+    float sunGlow = pow(saturate(sunCosAngle), 32.0);
+    skyColor += ctx.sunColor * sunGlow * ctx.sunIntensity * 0.1;
+#endif
 
 #if ENABLE_VOLUMETRIC_CLOUDS
     // Volumetric clouds
@@ -254,7 +363,7 @@ float3 renderSkyWithClouds(float3 rayDir, OpenRTXContext ctx)
 
     // Cirrus layer
     float3 cirrus = renderCirrusClouds(rayDir, ctx.sunDir, ctx.sunColor, ctx.time);
-    skyColor += cirrus * sky.transmittance;
+    skyColor += cirrus * 0.3;
 #endif
 
     return skyColor;

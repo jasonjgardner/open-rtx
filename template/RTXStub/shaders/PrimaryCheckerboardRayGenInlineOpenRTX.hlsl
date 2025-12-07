@@ -334,18 +334,25 @@ void PrimaryCheckerboardRayGenInline(
     rayDesc.TMin = 0;
     rayDesc.TMax = 10000;
 
-    // Initialize OpenRTX context
+    // Initialize OpenRTX context with game-provided values
     float3 sunDir = getTrueDirectionToSun();
-    float rainIntensity = 0.0; // Would come from game state
 
-    OpenRTXContext ctx = initContext(
+    OpenRTXContext ctx = initContextFromGame(
         rayDesc.Origin,
         rayDesc.Direction,
         (float2(dispatchThreadID.xy) + 0.5) * g_view.recipRenderResolution,
         g_view.time,
         sunDir,
-        rainIntensity,
-        0); // Overworld
+        g_view.sunColour,           // Game-provided sun color
+        g_view.skyColor,            // Game-provided sky color
+        g_view.skyColorUp,          // Upper sky gradient
+        g_view.skyColorDown,        // Lower sky gradient
+        g_view.constantAmbient,     // Ambient light
+        g_view.skyIntensityAdjustment,
+        g_view.sunMeshIntensity,
+        g_view.moonMeshIntensity,
+        g_view.rainLevel,           // Rain intensity from game
+        0); // Overworld dimension
 
     // Render
     float hitDist;
