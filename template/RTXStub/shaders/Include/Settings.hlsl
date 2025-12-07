@@ -565,8 +565,56 @@
 #endif
 
 // =============================================================================
+// RAYTRACED REFLECTIONS SETTINGS
+// =============================================================================
+
+#ifndef ENABLE_RAYTRACED_REFLECTIONS
+#define ENABLE_RAYTRACED_REFLECTIONS 1  // Master toggle for RT reflections
+#endif
+
+#ifndef REFLECTION_MAX_ROUGHNESS
+#define REFLECTION_MAX_ROUGHNESS 0.5  // Skip reflections above this roughness
+#endif
+
+#ifndef REFLECTION_MAX_BOUNCES
+#define REFLECTION_MAX_BOUNCES 2  // Maximum reflection bounces
+#endif
+
+#ifndef REFLECTION_ROUGHNESS_BIAS
+#define REFLECTION_ROUGHNESS_BIAS 0.0  // Bias to make reflections sharper
+#endif
+
+#ifndef ENABLE_REFLECTION_DENOISING
+#define ENABLE_REFLECTION_DENOISING 1  // Temporal denoising for reflections
+#endif
+
+#ifndef REFLECTION_TEMPORAL_ALPHA
+#define REFLECTION_TEMPORAL_ALPHA 0.1  // Lower = more temporal accumulation
+#endif
+
+#ifndef REFLECTION_SAMPLES
+#define REFLECTION_SAMPLES 2  // Number of reflection samples per pixel (1 = sharp, 2-4 = denoised)
+#endif
+
+// =============================================================================
 // SHADOW SETTINGS
 // =============================================================================
+
+#ifndef ENABLE_RAYTRACED_SHADOWS
+#define ENABLE_RAYTRACED_SHADOWS 1  // Master toggle for RT shadows
+#endif
+
+#ifndef ENABLE_SOFT_SHADOWS
+#define ENABLE_SOFT_SHADOWS 1  // Soft shadow penumbras
+#endif
+
+#ifndef SHADOW_SOFTNESS
+#define SHADOW_SOFTNESS 0.02  // Sun angular radius for soft shadows
+#endif
+
+#ifndef SHADOW_SAMPLES
+#define SHADOW_SAMPLES 1  // Shadow ray samples (1 = hard, 4+ = soft)
+#endif
 
 #ifndef ENABLE_TEMPORAL_SHADOW_FILTER
 #define ENABLE_TEMPORAL_SHADOW_FILTER 1
@@ -582,6 +630,10 @@
 
 #ifndef ENABLE_SHADOW_REFRACTION
 #define ENABLE_SHADOW_REFRACTION 1  // Underwater shadow rays
+#endif
+
+#ifndef COLOR_TRANSMISSION_STRENGTH
+#define COLOR_TRANSMISSION_STRENGTH 1.0  // Strength of colored light transmission
 #endif
 
 // =============================================================================

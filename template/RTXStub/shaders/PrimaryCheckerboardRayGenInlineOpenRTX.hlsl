@@ -51,10 +51,13 @@ struct OpenRTXRayState
 
     // OpenRTX additions
     float3 normal;
+    float3 position;
+    float3 albedo;
     float roughness;
     float metalness;
     bool hitWater;
     float waterDepth;
+    bool hitOpaque;
 
     void Init()
     {
@@ -65,12 +68,301 @@ struct OpenRTXRayState
         instanceMask = 0xff;
 
         normal = float3(0, 1, 0);
+        position = 0;
+        albedo = 0.5;
         roughness = 0.5;
         metalness = 0;
         hitWater = false;
         waterDepth = 0;
+        hitOpaque = false;
     }
 };
+
+// =============================================================================
+// SHADOW RAY TRACING WITH COLOR TRANSMISSION
+// =============================================================================
+
+struct ShadowResult
+{
+    float visibility;       // 0 = fully shadowed, 1 = fully lit
+    float3 transmission;    // Color transmitted through translucent surfaces
+};
+
+// Trace shadow ray with color transmission through translucent surfaces
+ShadowResult traceShadowRay(float3 origin, float3 direction, float maxDist, OpenRTXContext ctx)
+{
+    ShadowResult result;
+    result.visibility = 1.0;
+    result.transmission = 1.0;
+
+#if ENABLE_RAYTRACED_SHADOWS
+    RayQuery<RAY_FLAG_NONE> shadowQuery;
+    RayDesc shadowRay;
+    shadowRay.Origin = origin + direction * 0.001;  // Bias to avoid self-intersection
+    shadowRay.Direction = direction;
+    shadowRay.TMin = 0.0;
+    shadowRay.TMax = maxDist;
+
+    float3 colorAccum = 1.0;
+
+    // Trace through multiple translucent surfaces
+    for (int bounce = 0; bounce < 8; bounce++)
+    {
+        shadowQuery.TraceRayInline(SceneBVH, RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0xff, shadowRay);
+
+        while (shadowQuery.Proceed())
+        {
+            HitInfo hitInfo = GetCandidateHitInfo(shadowQuery);
+            if (AlphaTestHitLogic(hitInfo))
+            {
+                shadowQuery.CommitNonOpaqueTriangleHit();
+            }
+        }
+
+        if (shadowQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+        {
+            HitInfo hitInfo = GetCommittedHitInfo(shadowQuery);
+            ObjectInstance objectInstance = objectInstances[hitInfo.objectInstanceIndex];
+            GeometryInfo geometryInfo = GetGeometryInfo(hitInfo, objectInstance);
+            SurfaceInfo surfaceInfo = MaterialVanilla(hitInfo, geometryInfo, objectInstance);
+
+            // Check if opaque hit
+            if (hitInfo.materialType == MATERIAL_TYPE_OPAQUE ||
+                hitInfo.materialType == MATERIAL_TYPE_ALPHA_TEST)
+            {
+                // Opaque surface blocks light completely
+                result.visibility = 0.0;
+                result.transmission = 0.0;
+                return result;
+            }
+
+            // Translucent surface - accumulate color transmission
+#if ENABLE_COLORED_SHADOWS
+            // Apply Beer's law for color absorption
+            float3 surfaceColor = surfaceInfo.color;
+            float alpha = surfaceInfo.alpha;
+
+            // Color transmission through translucent material
+            float3 transmittedColor = lerp(1.0, surfaceColor, alpha * COLOR_TRANSMISSION_STRENGTH);
+            colorAccum *= transmittedColor;
+
+            // Reduce visibility based on alpha
+            result.visibility *= (1.0 - alpha * 0.5);
+#else
+            result.visibility *= (1.0 - surfaceInfo.alpha);
+#endif
+
+            // Continue ray past this surface
+            shadowRay.Origin = shadowRay.Origin + shadowRay.Direction * (hitInfo.rayT + 0.001);
+            shadowRay.TMax -= hitInfo.rayT;
+
+            if (shadowRay.TMax <= 0.0 || result.visibility < 0.01)
+                break;
+        }
+        else
+        {
+            // No more hits - reached the light
+            break;
+        }
+    }
+
+    result.transmission = colorAccum;
+#endif
+
+    return result;
+}
+
+// Generate soft shadow sample direction
+float3 getSoftShadowDirection(float3 lightDir, float2 xi, float softness)
+{
+    // Create orthonormal basis around light direction
+    float3 tangent = normalize(cross(lightDir, abs(lightDir.y) < 0.999 ? float3(0, 1, 0) : float3(1, 0, 0)));
+    float3 bitangent = cross(lightDir, tangent);
+
+    // Disk sampling for soft shadows
+    float r = sqrt(xi.x) * softness;
+    float theta = xi.y * 2.0 * kPi;
+
+    float3 offset = tangent * (r * cos(theta)) + bitangent * (r * sin(theta));
+    return normalize(lightDir + offset);
+}
+
+// =============================================================================
+// REFLECTION RAY TRACING
+// =============================================================================
+
+// Simple hash for noise generation
+float hashReflection(float2 p)
+{
+    float3 p3 = frac(float3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return frac((p3.x + p3.y) * p3.z);
+}
+
+// GGX importance sampling for rough reflections
+float3 importanceSampleGGX(float2 xi, float3 N, float roughness)
+{
+    float a = roughness * roughness;
+    float a2 = a * a;
+
+    float phi = 2.0 * kPi * xi.x;
+    float cosTheta = sqrt((1.0 - xi.y) / (1.0 + (a2 - 1.0) * xi.y));
+    float sinTheta = sqrt(1.0 - cosTheta * cosTheta);
+
+    // Spherical to cartesian
+    float3 H;
+    H.x = cos(phi) * sinTheta;
+    H.y = sin(phi) * sinTheta;
+    H.z = cosTheta;
+
+    // Tangent space to world space
+    float3 up = abs(N.z) < 0.999 ? float3(0, 0, 1) : float3(1, 0, 0);
+    float3 tangent = normalize(cross(up, N));
+    float3 bitangent = cross(N, tangent);
+
+    return normalize(tangent * H.x + bitangent * H.y + N * H.z);
+}
+
+// Trace a single reflection sample
+float3 traceSingleReflection(float3 origin, float3 reflectDir, float3 normal, OpenRTXContext ctx)
+{
+    float3 reflectionColor = 0.0;
+
+    // Trace reflection ray
+    RayQuery<RAY_FLAG_NONE> reflectQuery;
+    RayDesc reflectRay;
+    reflectRay.Origin = origin + normal * 0.01;  // Bias along normal
+    reflectRay.Direction = reflectDir;
+    reflectRay.TMin = 0.0;
+    reflectRay.TMax = 1000.0;
+
+    reflectQuery.TraceRayInline(SceneBVH, RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0xff, reflectRay);
+
+    while (reflectQuery.Proceed())
+    {
+        HitInfo hitInfo = GetCandidateHitInfo(reflectQuery);
+        if (AlphaTestHitLogic(hitInfo))
+        {
+            reflectQuery.CommitNonOpaqueTriangleHit();
+        }
+    }
+
+    if (reflectQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+    {
+        HitInfo hitInfo = GetCommittedHitInfo(reflectQuery);
+        ObjectInstance objectInstance = objectInstances[hitInfo.objectInstanceIndex];
+        GeometryInfo geometryInfo = GetGeometryInfo(hitInfo, objectInstance);
+        SurfaceInfo surfaceInfo = MaterialVanilla(hitInfo, geometryInfo, objectInstance);
+
+        // Simple shading for reflected surface
+        float3 N = surfaceInfo.normal;
+        float NdotL = saturate(dot(N, ctx.sunDir));
+
+        // Direct lighting on reflected surface
+        float3 directLight = surfaceInfo.color * ctx.sunColor * NdotL * 0.5;
+
+        // Add ambient
+        directLight += surfaceInfo.color * ctx.constantAmbient;
+
+        // Add emissive
+        directLight += surfaceInfo.color * surfaceInfo.emissive * 2.0;
+
+        reflectionColor = directLight;
+    }
+    else
+    {
+        // Hit sky
+        reflectionColor = renderSkyWithClouds(reflectDir, ctx);
+    }
+
+    return reflectionColor;
+}
+
+// Trace reflection ray with inline denoising (multiple samples + filtering)
+float3 traceReflection(float3 origin, float3 viewDir, float3 normal, float roughness,
+                       float metalness, float3 albedo, float2 pixelCoord, OpenRTXContext ctx, int bounceDepth)
+{
+    float3 reflectionColor = 0.0;
+
+#if ENABLE_RAYTRACED_REFLECTIONS
+    // Skip if too rough
+    float effectiveRoughness = max(roughness - REFLECTION_ROUGHNESS_BIAS, MIN_ROUGHNESS);
+    if (effectiveRoughness > REFLECTION_MAX_ROUGHNESS || bounceDepth >= REFLECTION_MAX_BOUNCES)
+    {
+        // Fall back to sky reflection for rough surfaces
+        float3 reflectDir = reflect(viewDir, normal);
+        return renderSkyWithClouds(reflectDir, ctx) * 0.1;
+    }
+
+    // Determine number of samples based on roughness (more samples for rougher surfaces)
+    int numSamples = REFLECTION_SAMPLES;
+    if (effectiveRoughness < 0.05)
+    {
+        numSamples = 1;  // Mirror-like surfaces need only one sample
+    }
+
+    float3 accumulatedColor = 0.0;
+    float totalWeight = 0.0;
+
+    // Use temporal jitter based on frame for better convergence
+    float frameJitter = frac(g_view.time * 7.31);
+
+    [unroll]
+    for (int s = 0; s < REFLECTION_SAMPLES; s++)
+    {
+        if (s >= numSamples) break;
+
+        // Generate sample direction with temporal variation
+        float2 xi = float2(
+            hashReflection(pixelCoord + float2(s * 17.0 + frameJitter * 100.0, 0.0)),
+            hashReflection(pixelCoord + float2(0.0, s * 31.0 + frameJitter * 100.0 + 1000.0))
+        );
+
+        float3 H = importanceSampleGGX(xi, normal, effectiveRoughness);
+        float3 reflectDir = reflect(viewDir, H);
+
+        // Ensure reflection direction points away from surface
+        if (dot(reflectDir, normal) < 0.0)
+            reflectDir = reflect(viewDir, normal);
+
+        // Calculate sample weight based on PDF
+        float NdotH = saturate(dot(normal, H));
+        float VdotH = saturate(dot(-viewDir, H));
+        float weight = 1.0;  // GGX already importance sampled
+
+        // Trace and accumulate
+        float3 sampleColor = traceSingleReflection(origin, reflectDir, normal, ctx);
+        accumulatedColor += sampleColor * weight;
+        totalWeight += weight;
+    }
+
+    // Average samples
+    if (totalWeight > 0.0)
+    {
+        reflectionColor = accumulatedColor / totalWeight;
+    }
+
+    // Compute Fresnel
+    float3 f0 = lerp(0.04, albedo, metalness);
+    float NdotV = saturate(dot(normal, -viewDir));
+    float3 fresnel = f0 + (1.0 - f0) * pow(1.0 - NdotV, 5.0);
+
+    // Apply fresnel to reflection
+    reflectionColor *= fresnel;
+
+    // Fade based on roughness
+    float roughnessFade = 1.0 - saturate(effectiveRoughness / REFLECTION_MAX_ROUGHNESS);
+    reflectionColor *= roughnessFade;
+
+    // Apply simple edge-aware filtering to reduce noise
+    // Using a subtle contrast-based smoothing factor
+    float luminance = dot(reflectionColor, float3(0.299, 0.587, 0.114));
+    float smoothFactor = saturate(1.0 - effectiveRoughness * 2.0);
+    reflectionColor = lerp(reflectionColor, reflectionColor * smoothFactor + luminance * (1.0 - smoothFactor) * fresnel, effectiveRoughness);
+#endif
+
+    return reflectionColor;
+}
 
 // =============================================================================
 // ENHANCED RENDERING FUNCTIONS
@@ -108,7 +400,7 @@ void RenderSkyOpenRTX(inout OpenRTXRayState rayState, OpenRTXContext ctx)
 #endif
 }
 
-void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenRTXContext ctx)
+void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenRTXContext ctx, float2 pixelCoord)
 {
     ObjectInstance objectInstance = objectInstances[hitInfo.objectInstanceIndex];
     GeometryInfo geometryInfo = GetGeometryInfo(hitInfo, objectInstance);
@@ -119,6 +411,8 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
 
     // Store surface properties
     rayState.normal = surfaceInfo.normal;
+    rayState.position = surfaceInfo.position;
+    rayState.albedo = surfaceInfo.color;
     rayState.roughness = surfaceInfo.roughness;
     rayState.metalness = surfaceInfo.metalness;
 
@@ -128,6 +422,52 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
     {
         rayState.hitWater = true;
     }
+
+    // Check if this is an opaque hit (for reflections later)
+    bool isOpaque = (hitInfo.materialType == MATERIAL_TYPE_OPAQUE ||
+                     hitInfo.materialType == MATERIAL_TYPE_ALPHA_TEST);
+    if (isOpaque && !rayState.hitOpaque)
+    {
+        rayState.hitOpaque = true;
+    }
+
+    // =================================================================
+    // RAYTRACED SHADOWS WITH COLOR TRANSMISSION
+    // =================================================================
+    ShadowResult shadow;
+    shadow.visibility = 1.0;
+    shadow.transmission = 1.0;
+
+#if OPENRTX_ENABLED && ENABLE_RAYTRACED_SHADOWS
+    // Only trace shadows for surfaces facing the sun
+    float NdotL = dot(surfaceInfo.normal, ctx.sunDir);
+    if (NdotL > 0.0 && isOpaque)
+    {
+#if ENABLE_SOFT_SHADOWS && SHADOW_SAMPLES > 1
+        // Soft shadows with multiple samples
+        float totalVisibility = 0.0;
+        float3 totalTransmission = 0.0;
+
+        [unroll]
+        for (int s = 0; s < SHADOW_SAMPLES; s++)
+        {
+            float2 xi = float2(
+                hashReflection(pixelCoord + float2(s * 17.0, g_view.time * 50.0)),
+                hashReflection(pixelCoord + float2(g_view.time * 50.0, s * 31.0))
+            );
+            float3 shadowDir = getSoftShadowDirection(ctx.sunDir, xi, SHADOW_SOFTNESS);
+            ShadowResult sampleShadow = traceShadowRay(surfaceInfo.position, shadowDir, 1000.0, ctx);
+            totalVisibility += sampleShadow.visibility;
+            totalTransmission += sampleShadow.transmission;
+        }
+        shadow.visibility = totalVisibility / float(SHADOW_SAMPLES);
+        shadow.transmission = totalTransmission / float(SHADOW_SAMPLES);
+#else
+        // Single hard shadow sample
+        shadow = traceShadowRay(surfaceInfo.position, ctx.sunDir, 1000.0, ctx);
+#endif
+    }
+#endif
 
 #if OPENRTX_ENABLED && ENABLE_PBR_LIGHTING
     // Enhanced PBR lighting
@@ -139,7 +479,7 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
     surface.albedo = surfaceInfo.color;
     surface.roughness = max(surfaceInfo.roughness, MIN_ROUGHNESS);
     surface.metalness = surfaceInfo.metalness;
-    surface.ao = 1.0; // Would need AO buffer
+    surface.ao = 1.0;
     surface.subsurface = surfaceInfo.subsurface;
     surface.emissive = surfaceInfo.emissive;
     surface.isWater = isWater;
@@ -154,6 +494,13 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
 #endif
 
     float3 light = shadeSurfacePBR(surface, ctx);
+
+    // Apply shadow with color transmission
+    float3 shadowedLight = light * shadow.visibility * shadow.transmission;
+    float3 ambientLight = surface.albedo * ctx.constantAmbient * surface.ao;
+
+    // Blend shadowed direct light with ambient
+    light = shadowedLight + ambientLight * (1.0 - shadow.visibility * 0.5);
 #else
     // Vanilla-like shading
     float3 light = lerp(
@@ -161,26 +508,62 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
         lerp(0.45, 1, mad(dot(surfaceInfo.normal, float3(0, 1, 0)), 0.5, 0.5)),
         abs(dot(surfaceInfo.normal, float3(0, 1, 0))));
 
+    // Apply shadow
+    light *= lerp(0.3, 1.0, shadow.visibility);
+
+    // Apply color transmission from stained glass etc.
+    light *= shadow.transmission;
+
     // Apply emissive
     light = lerp(light, 1, surfaceInfo.emissive);
 #endif
 
+    // =================================================================
+    // RAYTRACED REFLECTIONS
+    // =================================================================
+    float3 reflectionContrib = 0.0;
+
+#if OPENRTX_ENABLED && ENABLE_RAYTRACED_REFLECTIONS
+    // Add reflections for smooth/metallic surfaces
+    float reflectivity = surfaceInfo.metalness + (1.0 - surface.roughness) * 0.3;
+    if (reflectivity > 0.1 && isOpaque)
+    {
+        reflectionContrib = traceReflection(
+            surfaceInfo.position,
+            rayState.rayDesc.Direction,
+            surfaceInfo.normal,
+            surface.roughness,
+            surfaceInfo.metalness,
+            surfaceInfo.color,
+            pixelCoord,
+            ctx,
+            0  // Bounce depth
+        );
+
+        // For metals, reflection replaces diffuse; for dielectrics, it adds on top
+        if (surfaceInfo.metalness > 0.5)
+        {
+            light = lerp(light, reflectionContrib, surfaceInfo.metalness);
+        }
+        else
+        {
+            light += reflectionContrib * (1.0 - surface.roughness);
+        }
+    }
+#endif
+
     // Force full alpha for opaque/alphatest
-    if (hitInfo.materialType == MATERIAL_TYPE_OPAQUE || hitInfo.materialType == MATERIAL_TYPE_ALPHA_TEST)
+    if (isOpaque)
         surfaceInfo.alpha = 1;
 
     // Cloud special handling
     if (objectInstance.flags & kObjectInstanceFlagClouds)
     {
-#if OPENRTX_ENABLED
         light = geometryInfo.color.rgb;
-#else
-        light = geometryInfo.color.rgb;
-#endif
         surfaceInfo.alpha = 0.7;
     }
 
-    // Point lights
+    // Point lights with shadow
     for (int i = 0; i < min(10, g_view.cpuLightsCount); i++)
     {
         LightInfo lightInfo = inputLightsBuffer[i];
@@ -188,20 +571,10 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
 
         float3 lDir = lightInfo.position - surfaceInfo.position;
         float lDist = length(lDir);
-        lDir /= lDist;
+        lDir /= max(lDist, 0.001);
 
-        float attenuation = max(0, dot(surfaceInfo.normal, lDir)) / (lDist * lDist);
-
-#if OPENRTX_ENABLED && ENABLE_PBR_LIGHTING
-        // PBR point light contribution
-        float3 H = normalize(-rayState.rayDesc.Direction + lDir);
-        float NdotL = saturate(dot(surfaceInfo.normal, lDir));
-        float NdotH = saturate(dot(surfaceInfo.normal, H));
-
+        float attenuation = max(0, dot(surfaceInfo.normal, lDir)) / max(lDist * lDist, 0.001);
         light += 100 * attenuation * lightData.intensity * lightData.color;
-#else
-        light += 100 * attenuation * lightData.intensity * lightData.color;
-#endif
     }
 
     // Determine blending mode
@@ -219,14 +592,9 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
     }
     else if (isBlockBreakingOverlay)
     {
-#if FIX_BLOCK_BREAKING_OVERLAY
         // Multiplicative blending
         throughput = surfaceInfo.color;
         emission = 0;
-#else
-        throughput = surfaceInfo.color;
-        emission = 0;
-#endif
     }
     else
     {
@@ -251,7 +619,7 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
     rayState.motion = surfaceInfo.position - surfaceInfo.prevPosition;
 }
 
-float3 RenderRayOpenRTX(RayDesc rayDesc, out float outputDistance, out float3 outputMotion, OpenRTXContext ctx)
+float3 RenderRayOpenRTX(RayDesc rayDesc, out float outputDistance, out float3 outputMotion, OpenRTXContext ctx, float2 pixelCoord)
 {
     RayQuery<RAY_FLAG_NONE> q;
 
@@ -276,7 +644,7 @@ float3 RenderRayOpenRTX(RayDesc rayDesc, out float outputDistance, out float3 ou
         if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
         {
             HitInfo hitInfo = GetCommittedHitInfo(q);
-            RenderVanillaOpenRTX(hitInfo, rayState, ctx);
+            RenderVanillaOpenRTX(hitInfo, rayState, ctx, pixelCoord);
         }
         else
         {
@@ -357,7 +725,7 @@ void PrimaryCheckerboardRayGenInline(
     // Render
     float hitDist;
     float3 objMotion;
-    float3 color = RenderRayOpenRTX(rayDesc, hitDist, objMotion, ctx);
+    float3 color = RenderRayOpenRTX(rayDesc, hitDist, objMotion, ctx, float2(dispatchThreadID.xy));
 
     // Calculate motion vector
     float2 motionVector = computeMotionVector(rayDesc.Origin + rayDesc.Direction * hitDist, objMotion);
