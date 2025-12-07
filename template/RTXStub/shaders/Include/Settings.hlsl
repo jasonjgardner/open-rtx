@@ -725,9 +725,11 @@
 #define GLASS_MAX_BOUNCES 4
 #endif
 
-// Glass absorption color (tinted glass darkens light passing through)
+// Glass absorption scale multiplier for Beer-Lambert absorption
+// Higher values = stronger color tinting over distance
+// 1.0 = physically-based default, higher for more dramatic tinting
 #ifndef GLASS_ABSORPTION_SCALE
-#define GLASS_ABSORPTION_SCALE 0.5  // How much color absorption per unit thickness
+#define GLASS_ABSORPTION_SCALE 1.5
 #endif
 
 // Roughness for frosted glass effect (0 = clear, higher = frosted)
@@ -749,6 +751,12 @@
 // This maintains visible distortion for thin panes. Set higher for more distortion.
 #ifndef THIN_GLASS_THRESHOLD
 #define THIN_GLASS_THRESHOLD 0.25
+#endif
+
+// Minimum virtual thickness for glass color tinting (blocks)
+// Even paper-thin glass will show at least this much color absorption
+#ifndef GLASS_MIN_THICKNESS
+#define GLASS_MIN_THICKNESS 0.1
 #endif
 
 // =============================================================================

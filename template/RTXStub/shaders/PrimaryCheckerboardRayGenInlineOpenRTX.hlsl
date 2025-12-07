@@ -203,6 +203,7 @@ float3 glassRefract(float3 incident, float3 normal, float ior, out bool totalInt
 }
 
 // Physically accurate glass refraction with proper entry/exit handling
+// Returns: color of scene behind glass, attenuated by Beer-Lambert absorption
 float3 traceGlassRefractionWithIOR(float3 origin, float3 incidentDir, float3 entryNormal,
                                     float3 glassColor, float glassAlpha, OpenRTXContext ctx,
                                     int maxBounces, float ior)
@@ -217,6 +218,16 @@ float3 traceGlassRefractionWithIOR(float3 origin, float3 incidentDir, float3 ent
     bool insideGlass = true;  // We start by entering glass
     float currentIOR = ior;
     float totalGlassDistance = 0.0;  // Track distance traveled inside glass
+
+    // Convert glass color to absorption coefficients using Beer-Lambert law
+    // For colored glass: absorption = -ln(transmittance) / reference_distance
+    // We use the glass color as the transmittance at 1 unit distance
+    // Darker colors = higher absorption, brighter colors = lower absorption
+    float3 glassTransmittance = saturate(glassColor);
+    // Prevent log(0) - minimum transmittance of 1% per unit
+    glassTransmittance = max(glassTransmittance, 0.01);
+    // Calculate absorption coefficient (higher alpha = more colored/opaque glass)
+    float3 absorptionCoeff = -log(glassTransmittance) * lerp(0.5, 2.0, glassAlpha);
 
     // First, refract the incident ray as it enters the glass (air to glass)
     bool tir;
@@ -258,10 +269,11 @@ float3 traceGlassRefractionWithIOR(float3 origin, float3 incidentDir, float3 ent
 
             float distance = hitInfo.rayT;
 
-            // Apply absorption while traveling through glass
+            // Apply Beer-Lambert absorption while traveling through glass
+            // T = exp(-absorption_coefficient * distance)
             if (insideGlass)
             {
-                float3 absorption = exp(-(1.0 - glassColor) * distance * GLASS_ABSORPTION_SCALE);
+                float3 absorption = exp(-absorptionCoeff * distance * GLASS_ABSORPTION_SCALE);
                 throughput *= absorption;
                 totalGlassDistance += distance;
             }
@@ -284,6 +296,16 @@ float3 traceGlassRefractionWithIOR(float3 origin, float3 incidentDir, float3 ent
                     // This maintains the visual distortion effect
                     if (totalGlassDistance < THIN_GLASS_THRESHOLD)
                     {
+                        // Apply minimum absorption for thin glass visibility
+                        // Use a virtual minimum thickness for color tinting
+                        float virtualThickness = max(totalGlassDistance, GLASS_MIN_THICKNESS);
+                        float additionalDist = virtualThickness - totalGlassDistance;
+                        if (additionalDist > 0.0)
+                        {
+                            float3 additionalAbsorption = exp(-absorptionCoeff * additionalDist * GLASS_ABSORPTION_SCALE);
+                            throughput *= additionalAbsorption;
+                        }
+
                         // Skip exit refraction for thin glass - maintain distorted direction
                         currentOrigin = surfaceInfo.position;
                         insideGlass = false;
@@ -313,13 +335,14 @@ float3 traceGlassRefractionWithIOR(float3 origin, float3 incidentDir, float3 ent
                 else
                 {
                     // Entering another glass surface (stacked glass)
+                    // Update absorption coefficients for the new glass color
+                    float3 newGlassTransmittance = max(saturate(surfaceInfo.color), 0.01);
+                    absorptionCoeff = -log(newGlassTransmittance) * lerp(0.5, 2.0, surfaceInfo.alpha);
+
                     bool enterTir;
                     currentDir = refractEnterGlass(currentDir, hitNormal, currentIOR, enterTir);
                     currentOrigin = surfaceInfo.position;
                     insideGlass = true;
-
-                    // Tint by this glass's color
-                    throughput *= lerp(1.0, surfaceInfo.color, surfaceInfo.alpha * 0.5);
                 }
                 continue;
             }
@@ -1174,10 +1197,12 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
             float3 testDir = glassRefract(rayState.rayDesc.Direction, N, GLASS_IOR, tir);
 
             // Trace refracted ray to get what's behind the glass
+            // Beer-Lambert absorption is applied inside the trace function
             float3 refractedColor = 0.0;
             if (!tir)
             {
                 // Use dispersion-aware function (handles frosted glass too)
+                // Color absorption is handled by Beer-Lambert law in the trace
                 refractedColor = traceGlassWithDispersion(
                     surfaceInfo.position, rayState.rayDesc.Direction, N,
                     surfaceInfo.color, glassOpacity, ctx,
@@ -1190,16 +1215,16 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
                 refractedColor = renderSkyWithClouds(reflect(rayState.rayDesc.Direction, N), ctx);
             }
 
-            // Glass surface tint (for stained glass) - modulate transmitted light
-            float3 glassTint = lerp(float3(1, 1, 1), surfaceInfo.color, glassOpacity);
-
             // Combine: Fresnel reflection + transmitted/refracted light
-            // Most light goes through, tinted by glass color
-            float transmissionFactor = (1.0 - fresnel) * (1.0 - glassOpacity * 0.3);
-            float3 transmittedLight = refractedColor * glassTint * transmissionFactor;
+            // Beer-Lambert absorption already applied in trace - no additional tinting needed
+            // Transmission factor accounts for Fresnel reflectance only
+            float transmissionFactor = 1.0 - fresnel;
+            float3 transmittedLight = refractedColor * transmissionFactor;
 
-            // Small amount of surface lighting for visibility of glass itself
-            float3 glassSpecular = light * fresnel * 0.2;
+            // Specular reflection from glass surface (environment/sun reflection)
+            float3 reflectDir = reflect(rayState.rayDesc.Direction, N);
+            float3 reflectedLight = renderSkyWithClouds(reflectDir, ctx);
+            float3 glassSpecular = reflectedLight * fresnel;
 
             emission = transmittedLight + glassSpecular;
 
