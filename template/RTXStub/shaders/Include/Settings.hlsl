@@ -346,11 +346,11 @@
 
 // Cloud density and coverage
 #ifndef CLOUD_COVERAGE
-#define CLOUD_COVERAGE 0.5  // 0-1, overall cloud coverage
+#define CLOUD_COVERAGE 0.4  // 0-1, overall cloud coverage (reduced for less blocking)
 #endif
 
 #ifndef CLOUD_DENSITY
-#define CLOUD_DENSITY 0.1  // Optical density multiplier
+#define CLOUD_DENSITY 0.05  // Optical density multiplier (reduced for more translucent clouds)
 #endif
 
 #ifndef CLOUD_DETAIL_STRENGTH
@@ -377,7 +377,7 @@
 
 // Scattering
 #ifndef CLOUD_SCATTERING_COEFFICIENT
-#define CLOUD_SCATTERING_COEFFICIENT 0.9
+#define CLOUD_SCATTERING_COEFFICIENT 0.5  // Reduced for more translucent clouds
 #endif
 
 #ifndef CLOUD_PHASE_G1

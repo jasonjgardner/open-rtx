@@ -277,7 +277,8 @@ float beerPowder(float density, float cosTheta)
     // Mix based on angle to sun
     float depthProbability = lerp(powder, 1.0, saturate(cosTheta * 0.5 + 0.5));
 
-    return beer * depthProbability * 2.0;
+    // Reduced multiplier for more realistic scattering (was 2.0)
+    return beer * depthProbability * 1.0;
 }
 
 // Sample light transmittance through cloud (cone sample)

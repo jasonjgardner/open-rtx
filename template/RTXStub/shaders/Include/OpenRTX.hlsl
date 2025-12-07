@@ -372,10 +372,9 @@ float3 renderSkyWithClouds(float3 rayDir, OpenRTXContext ctx)
 
 #if ENABLE_VOLUMETRIC_CLOUDS
     // Volumetric clouds
-    // Note: sunMeshIntensity from game is for visual sun disk, not lighting
-    // Use a reasonable HDR intensity for cloud illumination
-    float cloudSunIntensity = max(ctx.sunIntensity, 3.0) * saturate(ctx.sunDir.y * 4.0 + 1.0);
-    float3 cloudSunColor = ctx.sunColor * cloudSunIntensity;
+    // Use moderate intensity for cloud illumination - too high makes them blown out
+    float dayFactor = saturate(ctx.sunDir.y * 4.0 + 1.0);
+    float3 cloudSunColor = ctx.sunColor * dayFactor * 1.5;  // Moderate multiplier
 
     CloudOutput clouds = renderVolumetricClouds(
         ctx.viewOrigin,
@@ -385,14 +384,20 @@ float3 renderSkyWithClouds(float3 rayDir, OpenRTXContext ctx)
         ctx.time,
         10000.0);
 
-    // Blend clouds with sky - ensure minimum sky visibility
-    float minTransmittance = 0.15;  // Prevent completely dark sky
-    float effectiveTransmittance = max(clouds.transmittance, minTransmittance);
-    skyColor = skyColor * effectiveTransmittance + clouds.color;
+    // Clamp cloud color to prevent blown-out clouds
+    clouds.color = min(clouds.color, 2.0);
 
-    // Cirrus layer
+    // Blend clouds with sky - use proper alpha blending
+    // Higher minimum transmittance to keep sky visible
+    float minTransmittance = 0.3;
+    float effectiveTransmittance = max(clouds.transmittance, minTransmittance);
+
+    // Blend: sky shows through based on transmittance, clouds add on top
+    skyColor = skyColor * effectiveTransmittance + clouds.color * (1.0 - clouds.transmittance);
+
+    // Cirrus layer (very subtle)
     float3 cirrus = renderCirrusClouds(rayDir, ctx.sunDir, ctx.sunColor, ctx.time);
-    skyColor += cirrus * 0.3;
+    skyColor += cirrus * 0.15;
 #endif
 
     return skyColor;
