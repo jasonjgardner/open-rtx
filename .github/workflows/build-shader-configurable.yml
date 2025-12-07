@@ -1,0 +1,532 @@
+name: Build Configurable Shader
+
+on:
+  workflow_dispatch:
+    inputs:
+      # ===========================================
+      # PRESET SELECTION
+      # ===========================================
+      preset:
+        description: 'Quick preset (overrides individual settings if not "custom")'
+        required: true
+        default: 'custom'
+        type: choice
+        options:
+          - custom
+          - performance
+          - balanced
+          - quality
+          - cinematic
+          - vanilla-plus
+
+      # ===========================================
+      # FEATURE TOGGLES
+      # ===========================================
+      enable_pbr_lighting:
+        description: 'Enable PBR Lighting'
+        required: false
+        default: true
+        type: boolean
+
+      enable_atmospheric_sky:
+        description: 'Enable Atmospheric Sky'
+        required: false
+        default: true
+        type: boolean
+
+      enable_volumetric_clouds:
+        description: 'Enable Volumetric Clouds'
+        required: false
+        default: true
+        type: boolean
+
+      enable_volumetric_lighting:
+        description: 'Enable Volumetric Lighting/Fog'
+        required: false
+        default: true
+        type: boolean
+
+      enable_water_effects:
+        description: 'Enable Advanced Water Effects'
+        required: false
+        default: true
+        type: boolean
+
+      enable_raytraced_reflections:
+        description: 'Enable Raytraced Reflections'
+        required: false
+        default: true
+        type: boolean
+
+      enable_raytraced_shadows:
+        description: 'Enable Raytraced Shadows'
+        required: false
+        default: true
+        type: boolean
+
+      enable_soft_shadows:
+        description: 'Enable Soft Shadows'
+        required: false
+        default: true
+        type: boolean
+
+      enable_colored_shadows:
+        description: 'Enable Colored Shadows (stained glass)'
+        required: false
+        default: true
+        type: boolean
+
+      enable_caustics:
+        description: 'Enable Water Caustics'
+        required: false
+        default: true
+        type: boolean
+
+      enable_subsurface_scattering:
+        description: 'Enable Subsurface Scattering'
+        required: false
+        default: true
+        type: boolean
+
+      enable_rain_wetness:
+        description: 'Enable Rain Wetness/Puddles'
+        required: false
+        default: true
+        type: boolean
+
+      # ===========================================
+      # QUALITY SETTINGS
+      # ===========================================
+      cloud_march_steps:
+        description: 'Cloud March Steps (16-128)'
+        required: false
+        default: '64'
+        type: choice
+        options:
+          - '16'
+          - '32'
+          - '48'
+          - '64'
+          - '96'
+          - '128'
+
+      cloud_light_march_steps:
+        description: 'Cloud Light Steps (2-12)'
+        required: false
+        default: '6'
+        type: choice
+        options:
+          - '2'
+          - '4'
+          - '6'
+          - '8'
+          - '12'
+
+      volumetric_steps:
+        description: 'Volumetric Fog Steps (8-64)'
+        required: false
+        default: '32'
+        type: choice
+        options:
+          - '8'
+          - '16'
+          - '24'
+          - '32'
+          - '48'
+          - '64'
+
+      reflection_samples:
+        description: 'Reflection Samples (1-4)'
+        required: false
+        default: '2'
+        type: choice
+        options:
+          - '1'
+          - '2'
+          - '4'
+
+      shadow_samples:
+        description: 'Shadow Samples (1-4)'
+        required: false
+        default: '1'
+        type: choice
+        options:
+          - '1'
+          - '2'
+          - '4'
+
+      reflection_max_bounces:
+        description: 'Max Reflection Bounces (1-4)'
+        required: false
+        default: '2'
+        type: choice
+        options:
+          - '1'
+          - '2'
+          - '3'
+          - '4'
+
+      # ===========================================
+      # VISUAL TUNING
+      # ===========================================
+      tonemapping_type:
+        description: 'Tonemapping Operator'
+        required: false
+        default: 'aces'
+        type: choice
+        options:
+          - 'vanilla'
+          - 'aces'
+          - 'uncharted2'
+          - 'reinhard'
+          - 'uchimura'
+          - 'agx'
+          - 'none'
+
+      sun_intensity:
+        description: 'Sun Intensity (50-200)'
+        required: false
+        default: '100'
+        type: choice
+        options:
+          - '50'
+          - '75'
+          - '100'
+          - '125'
+          - '150'
+          - '200'
+
+      emissive_intensity:
+        description: 'Emissive Intensity (2-10)'
+        required: false
+        default: '5'
+        type: choice
+        options:
+          - '2'
+          - '3'
+          - '5'
+          - '7'
+          - '10'
+
+      cloud_coverage:
+        description: 'Cloud Coverage (0.2-0.8)'
+        required: false
+        default: '0.5'
+        type: choice
+        options:
+          - '0.2'
+          - '0.3'
+          - '0.4'
+          - '0.5'
+          - '0.6'
+          - '0.7'
+          - '0.8'
+
+      fog_density:
+        description: 'Fog Density'
+        required: false
+        default: '0.001'
+        type: choice
+        options:
+          - '0.0005'
+          - '0.001'
+          - '0.002'
+          - '0.005'
+          - '0.01'
+
+      water_wave_amplitude:
+        description: 'Water Wave Amplitude'
+        required: false
+        default: '0.05'
+        type: choice
+        options:
+          - '0.02'
+          - '0.05'
+          - '0.1'
+          - '0.15'
+          - '0.2'
+
+env:
+  VANILLA_VERSION: v23
+  DXC_VERSION: "1.8.2505.1"
+  LAZURITE_VERSION: "0.7.0"
+
+jobs:
+  build:
+    name: Build Configurable Shader
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: pip-windows-py312-lazurite-${{ env.LAZURITE_VERSION }}
+
+      - name: Install Lazurite
+        run: |
+          pip install lazurite==${{ env.LAZURITE_VERSION }}
+
+      - name: Cache vanilla materials
+        id: cache-vanilla
+        uses: actions/cache@v4
+        with:
+          path: vanilla/
+          key: vanilla-materials-${{ env.VANILLA_VERSION }}
+
+      - name: Download vanilla materials
+        if: steps.cache-vanilla.outputs.cache-hit != 'true'
+        shell: pwsh
+        env:
+          VANILLA_URL: ${{ secrets.VANILLA_BASE_URL }}
+        run: |
+          New-Item -ItemType Directory -Force -Path vanilla
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri "$env:VANILLA_URL/RTXStub.material.bin" -OutFile "vanilla/RTXStub.material.bin"
+          Invoke-WebRequest -Uri "$env:VANILLA_URL/RTXPostFX.Tonemapping.material.bin" -OutFile "vanilla/RTXPostFX.Tonemapping.material.bin"
+          Invoke-WebRequest -Uri "$env:VANILLA_URL/RTXPostFX.Bloom.material.bin" -OutFile "vanilla/RTXPostFX.Bloom.material.bin"
+
+      - name: Cache DXC
+        id: cache-dxc
+        uses: actions/cache@v4
+        with:
+          path: dxc/
+          key: dxc-windows-${{ env.DXC_VERSION }}
+
+      - name: Download DXC
+        if: steps.cache-dxc.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v${{ env.DXC_VERSION }}/dxc_2025_07_14.zip" -OutFile "dxc.zip"
+          Expand-Archive -Path "dxc.zip" -DestinationPath "dxc" -Force
+          Remove-Item "dxc.zip"
+
+      - name: Cache shaderc
+        id: cache-shaderc
+        uses: actions/cache@v4
+        with:
+          path: shaderc.exe
+          key: shaderc-windows-x64-bgfx-mcbe
+
+      - name: Download shaderc
+        if: steps.cache-shaderc.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri "https://github.com/veka0/bgfx-mcbe/releases/download/binaries/shaderc-win-x64.zip" -OutFile "shaderc.zip"
+          Expand-Archive -Path "shaderc.zip" -DestinationPath "." -Force
+          Remove-Item "shaderc.zip"
+          if (Test-Path "shadercRelease.exe") { Rename-Item "shadercRelease.exe" "shaderc.exe" }
+
+      - name: Generate settings override
+        shell: pwsh
+        run: |
+          # Determine effective settings based on preset or custom inputs
+          $preset = "${{ inputs.preset }}"
+
+          # Preset configurations
+          $presets = @{
+            "performance" = @{
+              CLOUD_MARCH_STEPS = 32
+              CLOUD_LIGHT_MARCH_STEPS = 2
+              VOLUMETRIC_STEPS = 16
+              REFLECTION_SAMPLES = 1
+              SHADOW_SAMPLES = 1
+              REFLECTION_MAX_BOUNCES = 1
+              ENABLE_SUBSURFACE_SCATTERING = 0
+              ENABLE_CAUSTICS = 0
+              ENABLE_SOFT_SHADOWS = 0
+            }
+            "balanced" = @{
+              CLOUD_MARCH_STEPS = 48
+              CLOUD_LIGHT_MARCH_STEPS = 4
+              VOLUMETRIC_STEPS = 24
+              REFLECTION_SAMPLES = 2
+              SHADOW_SAMPLES = 1
+              REFLECTION_MAX_BOUNCES = 2
+            }
+            "quality" = @{
+              CLOUD_MARCH_STEPS = 96
+              CLOUD_LIGHT_MARCH_STEPS = 8
+              VOLUMETRIC_STEPS = 48
+              REFLECTION_SAMPLES = 4
+              SHADOW_SAMPLES = 2
+              REFLECTION_MAX_BOUNCES = 3
+            }
+            "cinematic" = @{
+              CLOUD_MARCH_STEPS = 128
+              CLOUD_LIGHT_MARCH_STEPS = 12
+              VOLUMETRIC_STEPS = 64
+              REFLECTION_SAMPLES = 4
+              SHADOW_SAMPLES = 4
+              REFLECTION_MAX_BOUNCES = 4
+              FOG_DENSITY = 0.002
+              CLOUD_COVERAGE = 0.6
+            }
+            "vanilla-plus" = @{
+              ENABLE_VOLUMETRIC_CLOUDS = 0
+              ENABLE_ATMOSPHERIC_SKY = 0
+              ENABLE_SUBSURFACE_SCATTERING = 0
+              ENABLE_CAUSTICS = 0
+              CLOUD_MARCH_STEPS = 32
+              VOLUMETRIC_STEPS = 16
+              TONEMAPPING_TYPE = 0
+            }
+          }
+
+          # Map tonemapping string to number
+          $tonemapMap = @{
+            "vanilla" = 0
+            "aces" = 1
+            "uncharted2" = 2
+            "reinhard" = 3
+            "uchimura" = 4
+            "agx" = 5
+            "none" = 6
+          }
+
+          # Build settings content
+          $settings = @"
+          // =============================================================================
+          // AUTO-GENERATED SETTINGS OVERRIDE
+          // Preset: $preset
+          // Generated: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss UTC")
+          // =============================================================================
+
+          #ifndef __OPENRTX_SETTINGS_OVERRIDE_HLSL__
+          #define __OPENRTX_SETTINGS_OVERRIDE_HLSL__
+
+          "@
+
+          if ($preset -ne "custom" -and $presets.ContainsKey($preset)) {
+            # Apply preset
+            foreach ($key in $presets[$preset].Keys) {
+              $value = $presets[$preset][$key]
+              $settings += "#define $key $value`n"
+            }
+          } else {
+            # Apply custom settings from inputs
+            $settings += @"
+          // Feature Toggles
+          #define ENABLE_PBR_LIGHTING $([int]([bool]::Parse("${{ inputs.enable_pbr_lighting }}")))
+          #define ENABLE_ATMOSPHERIC_SKY $([int]([bool]::Parse("${{ inputs.enable_atmospheric_sky }}")))
+          #define ENABLE_VOLUMETRIC_CLOUDS $([int]([bool]::Parse("${{ inputs.enable_volumetric_clouds }}")))
+          #define ENABLE_VOLUMETRIC_LIGHTING $([int]([bool]::Parse("${{ inputs.enable_volumetric_lighting }}")))
+          #define ENABLE_WATER_EFFECTS $([int]([bool]::Parse("${{ inputs.enable_water_effects }}")))
+          #define ENABLE_RAYTRACED_REFLECTIONS $([int]([bool]::Parse("${{ inputs.enable_raytraced_reflections }}")))
+          #define ENABLE_RAYTRACED_SHADOWS $([int]([bool]::Parse("${{ inputs.enable_raytraced_shadows }}")))
+          #define ENABLE_SOFT_SHADOWS $([int]([bool]::Parse("${{ inputs.enable_soft_shadows }}")))
+          #define ENABLE_COLORED_SHADOWS $([int]([bool]::Parse("${{ inputs.enable_colored_shadows }}")))
+          #define ENABLE_CAUSTICS $([int]([bool]::Parse("${{ inputs.enable_caustics }}")))
+          #define ENABLE_SUBSURFACE_SCATTERING $([int]([bool]::Parse("${{ inputs.enable_subsurface_scattering }}")))
+          #define ENABLE_RAIN_WETNESS $([int]([bool]::Parse("${{ inputs.enable_rain_wetness }}")))
+
+          // Quality Settings
+          #define CLOUD_MARCH_STEPS ${{ inputs.cloud_march_steps }}
+          #define CLOUD_LIGHT_MARCH_STEPS ${{ inputs.cloud_light_march_steps }}
+          #define VOLUMETRIC_STEPS ${{ inputs.volumetric_steps }}
+          #define REFLECTION_SAMPLES ${{ inputs.reflection_samples }}
+          #define SHADOW_SAMPLES ${{ inputs.shadow_samples }}
+          #define REFLECTION_MAX_BOUNCES ${{ inputs.reflection_max_bounces }}
+
+          // Visual Tuning
+          #define TONEMAPPING_TYPE $($tonemapMap["${{ inputs.tonemapping_type }}"])
+          #define SUN_INTENSITY ${{ inputs.sun_intensity }}.0
+          #define EMISSIVE_INTENSITY ${{ inputs.emissive_intensity }}.0
+          #define CLOUD_COVERAGE ${{ inputs.cloud_coverage }}
+          #define FOG_DENSITY ${{ inputs.fog_density }}
+          #define WATER_WAVE_AMPLITUDE ${{ inputs.water_wave_amplitude }}
+          "@
+          }
+
+          $settings += @"
+
+          #endif // __OPENRTX_SETTINGS_OVERRIDE_HLSL__
+          "@
+
+          # Write the override file
+          $settings | Out-File -FilePath "template/RTXStub/shaders/Include/SettingsOverride.hlsl" -Encoding utf8
+          Write-Host "Generated SettingsOverride.hlsl:"
+          Get-Content "template/RTXStub/shaders/Include/SettingsOverride.hlsl"
+
+      - name: Inject settings override into Settings.hlsl
+        shell: pwsh
+        run: |
+          $settingsPath = "template/RTXStub/shaders/Include/Settings.hlsl"
+          $content = Get-Content $settingsPath -Raw
+
+          # Add include for override file at the start (after license header)
+          $includeDirective = '#include "SettingsOverride.hlsl"'
+
+          # Find the position after the header guard
+          $insertPoint = $content.IndexOf("#define __OPENRTX_SETTINGS_HLSL__")
+          if ($insertPoint -gt 0) {
+            $insertPoint = $content.IndexOf("`n", $insertPoint) + 1
+            $newContent = $content.Substring(0, $insertPoint) + "`n" + $includeDirective + "`n" + $content.Substring($insertPoint)
+            $newContent | Out-File -FilePath $settingsPath -Encoding utf8 -NoNewline
+            Write-Host "Injected SettingsOverride.hlsl include into Settings.hlsl"
+          }
+
+      - name: Run template generation
+        shell: pwsh
+        run: |
+          Set-Location src
+          python script.py
+        continue-on-error: true
+
+      - name: Build shaders
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path build
+          $dxcPath = "$PWD\dxc\bin\x64\dxc.exe"
+          $shadercPath = "$PWD\shaderc.exe"
+
+          $output = lazurite build project/ -o build/ --shaderc $shadercPath --dxc $dxcPath 2>&1
+          $buildStatus = $LASTEXITCODE
+          $output | Out-File -FilePath build/build.log -Encoding utf8
+          $output | ForEach-Object { Write-Host $_ }
+
+          exit $buildStatus
+
+      - name: Determine artifact name
+        id: artifact-name
+        shell: pwsh
+        run: |
+          $preset = "${{ inputs.preset }}"
+          $shortSha = "${{ github.sha }}".Substring(0, 7)
+
+          if ($preset -eq "custom") {
+            $name = "openrtx-custom-$shortSha"
+          } else {
+            $name = "openrtx-$preset-$shortSha"
+          }
+
+          echo "name=$name" >> $env:GITHUB_OUTPUT
+
+      - name: Upload shader artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact-name.outputs.name }}
+          path: |
+            build/*.material.bin
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Upload build log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-log-${{ steps.artifact-name.outputs.name }}
+          path: |
+            build/build.log
+            template/RTXStub/shaders/Include/SettingsOverride.hlsl
+          retention-days: 7
