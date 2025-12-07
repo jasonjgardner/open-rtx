@@ -106,8 +106,25 @@ jobs:
 
       - name: Verify DXC installation
         run: |
-          which dxc || echo "DXC not in PATH"
-          dxc --version || echo "DXC version check failed"
+          echo "Looking for DXC..."
+          which dxc || find /usr -name "dxc*" 2>/dev/null || find /opt -name "dxc*" 2>/dev/null || echo "DXC not found"
+          DXC_PATH=$(which dxc 2>/dev/null || echo "")
+          if [ -z "$DXC_PATH" ]; then
+            # Try common locations
+            for p in /usr/bin/dxc /opt/dxc/bin/dxc /usr/local/bin/dxc; do
+              if [ -x "$p" ]; then
+                DXC_PATH="$p"
+                break
+              fi
+            done
+          fi
+          echo "DXC_PATH=$DXC_PATH" >> $GITHUB_ENV
+          if [ -n "$DXC_PATH" ]; then
+            echo "Found DXC at: $DXC_PATH"
+            "$DXC_PATH" --version || echo "DXC version check failed"
+          else
+            echo "WARNING: DXC not found!"
+          fi
 
       - name: Run template generation script
         run: |
@@ -124,7 +141,9 @@ jobs:
           ls -la vanilla/ 2>&1 | tee -a build/build.log
           echo "" | tee -a build/build.log
           echo "Running build command..." | tee -a build/build.log
-          lazurite build project/ -o build/ --shaderc /usr/local/bin/shaderc 2>&1 | tee -a build/build.log
+          echo "DXC path: $DXC_PATH" | tee -a build/build.log
+          echo "Shaderc path: /usr/local/bin/shaderc" | tee -a build/build.log
+          lazurite build project/ -o build/ --shaderc /usr/local/bin/shaderc --dxc "$DXC_PATH" 2>&1 | tee -a build/build.log
           BUILD_STATUS=$?
           echo "" | tee -a build/build.log
           echo "=== BUILD RESULT (exit code: $BUILD_STATUS) ===" | tee -a build/build.log
