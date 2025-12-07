@@ -312,7 +312,8 @@ float3 tonemapAgX(float3 color)
     float minEv = -12.47393;
     float maxEv = 4.026069;
     color = mul(agxMat, color);
-    color = clamp(log2(color), minEv, maxEv);
+    // Clamp to small positive value before log2 to prevent NaN from non-positive values
+    color = clamp(log2(max(color, 1e-10)), minEv, maxEv);
     color = (color - minEv) / (maxEv - minEv);
 
     // Apply sigmoid
