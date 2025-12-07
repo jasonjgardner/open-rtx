@@ -108,17 +108,18 @@ float3 getCauchyIOR(float baseIOR, float dispersionStrength)
     return A + B / wavelengthsSq;
 }
 
-// Refract with specific IOR (for dispersion)
-float3 refractWithIOR(float3 incident, float3 normal, float ior, out bool tir)
+// Refract with specific IOR ratio (eta = n1/n2)
+// For air to glass: eta = 1.0 / glassIOR
+// For glass to air: eta = glassIOR
+float3 refractWithEta(float3 incident, float3 normal, float eta, out bool tir)
 {
-    float eta = 1.0 / ior;
     float cosI = -dot(incident, normal);
 
+    // Ensure normal faces against incident direction
     if (cosI < 0.0)
     {
         normal = -normal;
         cosI = -cosI;
-        eta = ior;
     }
 
     float sinT2 = eta * eta * (1.0 - cosI * cosI);
@@ -132,6 +133,24 @@ float3 refractWithIOR(float3 incident, float3 normal, float ior, out bool tir)
     tir = false;
     float cosT = sqrt(1.0 - sinT2);
     return eta * incident + (eta * cosI - cosT) * normal;
+}
+
+// Convenience wrapper: refract entering glass from air
+float3 refractEnterGlass(float3 incident, float3 normal, float glassIOR, out bool tir)
+{
+    return refractWithEta(incident, normal, 1.0 / glassIOR, tir);
+}
+
+// Convenience wrapper: refract exiting glass to air
+float3 refractExitGlass(float3 incident, float3 normal, float glassIOR, out bool tir)
+{
+    return refractWithEta(incident, normal, glassIOR, tir);
+}
+
+// Legacy wrapper for compatibility
+float3 refractWithIOR(float3 incident, float3 normal, float ior, out bool tir)
+{
+    return refractEnterGlass(incident, normal, ior, tir);
 }
 
 // Calculate Fresnel reflectance for dielectric (glass) at given angle
@@ -183,27 +202,37 @@ float3 glassRefract(float3 incident, float3 normal, float ior, out bool totalInt
     return eta * incident + (eta * cosI - cosT) * normal;
 }
 
-// Trace refracted ray through glass and accumulate color
-float3 traceGlassRefraction(float3 origin, float3 direction, float3 normal,
-                            float3 glassColor, float glassAlpha, OpenRTXContext ctx,
-                            int maxBounces)
+// Physically accurate glass refraction with proper entry/exit handling
+float3 traceGlassRefractionWithIOR(float3 origin, float3 incidentDir, float3 entryNormal,
+                                    float3 glassColor, float glassAlpha, OpenRTXContext ctx,
+                                    int maxBounces, float ior)
 {
 #if !ENABLE_GLASS_REFRACTION
     return 0.0;
 #endif
 
-    float3 accumulatedColor = 0.0;
     float3 throughput = 1.0;
     float3 currentOrigin = origin;
-    float3 currentDir = direction;
+    float3 currentDir = incidentDir;
+    bool insideGlass = true;  // We start by entering glass
+    float currentIOR = ior;
 
-    // Trace through glass with multiple bounces for internal reflections
+    // First, refract the incident ray as it enters the glass (air to glass)
+    bool tir;
+    currentDir = refractEnterGlass(incidentDir, entryNormal, currentIOR, tir);
+    if (tir)
+    {
+        // Shouldn't happen when entering glass from air, but handle it
+        return 0.0;
+    }
+
+    // Trace through glass with multiple bounces
     [loop]
     for (int bounce = 0; bounce < maxBounces; bounce++)
     {
         RayQuery<RAY_FLAG_NONE> refractQuery;
         RayDesc refractRay;
-        refractRay.Origin = currentOrigin + currentDir * 0.01;
+        refractRay.Origin = currentOrigin + currentDir * 0.001;
         refractRay.Direction = currentDir;
         refractRay.TMin = 0.0;
         refractRay.TMax = 1000.0;
@@ -226,54 +255,84 @@ float3 traceGlassRefraction(float3 origin, float3 direction, float3 normal,
             GeometryInfo geometryInfo = GetGeometryInfo(hitInfo, objectInstance);
             SurfaceInfo surfaceInfo = MaterialVanilla(hitInfo, geometryInfo, objectInstance);
 
-            // Apply glass color absorption based on distance traveled
             float distance = hitInfo.rayT;
-            float3 absorption = exp(-glassColor * distance * GLASS_ABSORPTION_SCALE);
-            throughput *= absorption;
 
-            // Check if we hit another transparent surface (still in glass)
-            if (hitInfo.materialType != MATERIAL_TYPE_OPAQUE &&
-                hitInfo.materialType != MATERIAL_TYPE_ALPHA_TEST)
+            // Apply absorption while traveling through glass
+            if (insideGlass)
             {
-                // Exiting glass or hitting another glass surface
-                bool tir;
-                float3 exitNormal = surfaceInfo.normal;
-
-                // If normal faces same direction as ray, we're exiting
-                if (dot(currentDir, exitNormal) > 0)
-                    exitNormal = -exitNormal;
-
-                currentDir = glassRefract(currentDir, exitNormal, GLASS_IOR, tir);
-                currentOrigin = surfaceInfo.position;
-
-                if (tir)
-                {
-                    // Total internal reflection - continue inside glass
-                    continue;
-                }
-                // Continue to next iteration with refracted ray
-                continue;
+                float3 absorption = exp(-(1.0 - glassColor) * distance * GLASS_ABSORPTION_SCALE);
+                throughput *= absorption;
             }
 
-            // Hit an opaque surface - shade it
-            float3 N = surfaceInfo.normal;
-            float NdotL = saturate(dot(N, ctx.sunDir));
-            float3 surfaceLight = surfaceInfo.color * ctx.sunColor * NdotL * 0.5;
-            surfaceLight += surfaceInfo.color * ctx.constantAmbient;
-            surfaceLight += surfaceInfo.color * surfaceInfo.emissive * EMISSIVE_INTENSITY;
+            // Determine if we hit glass or something else
+            bool hitGlass = (hitInfo.materialType == MATERIAL_TYPE_ALPHA_BLEND) &&
+                           (hitInfo.materialType != MATERIAL_TYPE_WATER);
 
-            accumulatedColor = throughput * surfaceLight;
-            return accumulatedColor;
+            if (hitGlass)
+            {
+                float3 hitNormal = surfaceInfo.normal;
+
+                // Determine if we're exiting or entering glass based on normal direction
+                bool exitingGlass = dot(currentDir, hitNormal) > 0;
+
+                if (exitingGlass)
+                {
+                    // Exiting glass to air - use proper glass-to-air refraction
+                    // Normal should point into the glass (opposite ray direction)
+                    float3 exitNormal = -hitNormal;
+
+                    bool exitTir;
+                    float3 exitDir = refractExitGlass(currentDir, exitNormal, currentIOR, exitTir);
+
+                    if (exitTir)
+                    {
+                        // Total internal reflection - reflect and stay inside
+                        currentDir = reflect(currentDir, exitNormal);
+                        currentOrigin = surfaceInfo.position;
+                        continue;
+                    }
+
+                    // Successfully exited glass
+                    currentDir = exitDir;
+                    currentOrigin = surfaceInfo.position;
+                    insideGlass = false;
+                }
+                else
+                {
+                    // Entering another glass surface (stacked glass)
+                    bool enterTir;
+                    currentDir = refractEnterGlass(currentDir, hitNormal, currentIOR, enterTir);
+                    currentOrigin = surfaceInfo.position;
+                    insideGlass = true;
+
+                    // Tint by this glass's color
+                    throughput *= lerp(1.0, surfaceInfo.color, surfaceInfo.alpha * 0.5);
+                }
+                continue;
+            }
+            else
+            {
+                // Hit a non-glass surface - shade it and return
+                float3 N = surfaceInfo.normal;
+                float NdotL = saturate(dot(N, ctx.sunDir));
+
+                // Full shading for the surface behind glass
+                float3 surfaceLight = surfaceInfo.color * ctx.sunColor * NdotL;
+                surfaceLight += surfaceInfo.color * ctx.constantAmbient;
+                surfaceLight += surfaceInfo.color * surfaceInfo.emissive * EMISSIVE_INTENSITY;
+
+                return throughput * surfaceLight;
+            }
         }
         else
         {
-            // Hit sky through glass
-            accumulatedColor = throughput * renderSkyWithClouds(currentDir, ctx);
-            return accumulatedColor;
+            // Hit sky
+            return throughput * renderSkyWithClouds(currentDir, ctx);
         }
     }
 
-    return accumulatedColor;
+    // Ran out of bounces - return what we have
+    return throughput * renderSkyWithClouds(currentDir, ctx);
 }
 
 // =============================================================================
@@ -319,7 +378,7 @@ float3 sampleFrostedDirection(float3 direction, float3 normal, float roughness, 
 }
 
 // Trace glass with chromatic dispersion (traces R, G, B separately)
-float3 traceGlassWithDispersion(float3 origin, float3 direction, float3 normal,
+float3 traceGlassWithDispersion(float3 origin, float3 incidentDir, float3 normal,
                                  float3 glassColor, float glassAlpha, OpenRTXContext ctx,
                                  int maxBounces, float roughness, float2 pixelCoord)
 {
@@ -327,68 +386,32 @@ float3 traceGlassWithDispersion(float3 origin, float3 direction, float3 normal,
     return 0.0;
 #endif
 
+    // Apply roughness to incident direction if needed (frosted glass)
+    float3 direction = incidentDir;
+    if (roughness > 0.001)
+    {
+        direction = sampleFrostedDirection(incidentDir, normal, roughness, pixelCoord);
+    }
+
 #if ENABLE_GLASS_DISPERSION
-    // Get wavelength-dependent IOR
+    // Get wavelength-dependent IOR for chromatic dispersion
     float3 iorRGB = getCauchyIOR(GLASS_IOR, GLASS_DISPERSION_STRENGTH);
 
     float3 resultRGB = 0.0;
 
-    // Trace each wavelength separately
-    // Red channel
-    {
-        bool tirR;
-        float3 refractDirR = refractWithIOR(direction, normal, iorRGB.r, tirR);
-        if (roughness > 0.001)
-            refractDirR = sampleFrostedDirection(refractDirR, normal, roughness, pixelCoord + float2(0.0, 0.0));
+    // Trace each wavelength with its own IOR
+    float3 colorR = traceGlassRefractionWithIOR(origin, direction, normal, glassColor, glassAlpha, ctx, maxBounces, iorRGB.r);
+    float3 colorG = traceGlassRefractionWithIOR(origin, direction, normal, glassColor, glassAlpha, ctx, maxBounces, iorRGB.g);
+    float3 colorB = traceGlassRefractionWithIOR(origin, direction, normal, glassColor, glassAlpha, ctx, maxBounces, iorRGB.b);
 
-        if (!tirR)
-        {
-            float3 colorR = traceGlassRefraction(origin, refractDirR, normal, glassColor, glassAlpha, ctx, maxBounces);
-            resultRGB.r = colorR.r;
-        }
-    }
-
-    // Green channel
-    {
-        bool tirG;
-        float3 refractDirG = refractWithIOR(direction, normal, iorRGB.g, tirG);
-        if (roughness > 0.001)
-            refractDirG = sampleFrostedDirection(refractDirG, normal, roughness, pixelCoord + float2(0.33, 0.0));
-
-        if (!tirG)
-        {
-            float3 colorG = traceGlassRefraction(origin, refractDirG, normal, glassColor, glassAlpha, ctx, maxBounces);
-            resultRGB.g = colorG.g;
-        }
-    }
-
-    // Blue channel
-    {
-        bool tirB;
-        float3 refractDirB = refractWithIOR(direction, normal, iorRGB.b, tirB);
-        if (roughness > 0.001)
-            refractDirB = sampleFrostedDirection(refractDirB, normal, roughness, pixelCoord + float2(0.66, 0.0));
-
-        if (!tirB)
-        {
-            float3 colorB = traceGlassRefraction(origin, refractDirB, normal, glassColor, glassAlpha, ctx, maxBounces);
-            resultRGB.b = colorB.b;
-        }
-    }
+    resultRGB.r = colorR.r;
+    resultRGB.g = colorG.g;
+    resultRGB.b = colorB.b;
 
     return resultRGB;
 #else
-    // No dispersion - use standard refraction with optional roughness
-    bool tir;
-    float3 refractDir = glassRefract(direction, normal, GLASS_IOR, tir);
-
-    if (roughness > 0.001)
-        refractDir = sampleFrostedDirection(refractDir, normal, roughness, pixelCoord);
-
-    if (tir)
-        return 0.0;
-
-    return traceGlassRefraction(origin, refractDir, normal, glassColor, glassAlpha, ctx, maxBounces);
+    // No dispersion - use standard IOR
+    return traceGlassRefractionWithIOR(origin, direction, normal, glassColor, glassAlpha, ctx, maxBounces, GLASS_IOR);
 #endif
 }
 
