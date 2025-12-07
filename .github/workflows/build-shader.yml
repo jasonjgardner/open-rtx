@@ -1,0 +1,257 @@
+name: Build OpenRTX Shader
+
+on:
+  push:
+    branches:
+      - main
+      - 'claude/**'
+    paths:
+      - 'project/**'
+      - 'template/**'
+      - 'src/**'
+      - '.github/workflows/build-shader.yml'
+      - 'Dockerfile'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'project/**'
+      - 'template/**'
+      - 'src/**'
+  workflow_dispatch:
+
+env:
+  VANILLA_VERSION: v23
+  DXC_VERSION: "1.8.2505.1"
+  LAZURITE_VERSION: "0.7.0"
+
+jobs:
+  build:
+    name: Build Shader
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Mask secrets
+        shell: pwsh
+        run: |
+          Write-Host "::add-mask::${{ secrets.VANILLA_BASE_URL }}"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache pip packages
+        id: cache-pip
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: pip-windows-py312-lazurite-${{ env.LAZURITE_VERSION }}
+
+      - name: Install Lazurite
+        run: |
+          pip install lazurite==${{ env.LAZURITE_VERSION }}
+          pip show lazurite
+
+      - name: Cache vanilla materials
+        id: cache-vanilla
+        uses: actions/cache@v4
+        with:
+          path: vanilla/
+          key: vanilla-materials-${{ env.VANILLA_VERSION }}
+
+      - name: Download vanilla material.bin files
+        if: steps.cache-vanilla.outputs.cache-hit != 'true'
+        shell: pwsh
+        env:
+          VANILLA_URL: ${{ secrets.VANILLA_BASE_URL }}
+        run: |
+          New-Item -ItemType Directory -Force -Path vanilla
+          Write-Host "Downloading vanilla materials..."
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri "$env:VANILLA_URL/RTXStub.material.bin" -OutFile "vanilla/RTXStub.material.bin"
+          Invoke-WebRequest -Uri "$env:VANILLA_URL/RTXPostFX.Tonemapping.material.bin" -OutFile "vanilla/RTXPostFX.Tonemapping.material.bin"
+          Invoke-WebRequest -Uri "$env:VANILLA_URL/RTXPostFX.Bloom.material.bin" -OutFile "vanilla/RTXPostFX.Bloom.material.bin"
+          Write-Host "Downloaded vanilla materials:"
+          Get-ChildItem vanilla/
+
+      - name: Verify vanilla materials
+        shell: pwsh
+        run: |
+          Write-Host "Vanilla materials:"
+          Get-ChildItem vanilla/
+
+      - name: Cache DXC
+        id: cache-dxc
+        uses: actions/cache@v4
+        with:
+          path: dxc/
+          key: dxc-windows-${{ env.DXC_VERSION }}
+
+      - name: Download DXC (Microsoft DirectX Shader Compiler)
+        if: steps.cache-dxc.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          Write-Host "Downloading DXC..."
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v${{ env.DXC_VERSION }}/dxc_2025_07_14.zip" -OutFile "dxc.zip"
+          Expand-Archive -Path "dxc.zip" -DestinationPath "dxc" -Force
+          Remove-Item "dxc.zip"
+          Write-Host "DXC installed"
+
+      - name: Cache shaderc
+        id: cache-shaderc
+        uses: actions/cache@v4
+        with:
+          path: shaderc.exe
+          key: shaderc-windows-x64-bgfx-mcbe
+
+      - name: Download shaderc (veka0 bgfx-mcbe)
+        if: steps.cache-shaderc.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          Write-Host "Downloading shaderc..."
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri "https://github.com/veka0/bgfx-mcbe/releases/download/binaries/shaderc-win-x64.zip" -OutFile "shaderc.zip"
+          Expand-Archive -Path "shaderc.zip" -DestinationPath "." -Force
+          Remove-Item "shaderc.zip"
+          if (Test-Path "shadercRelease.exe") {
+            Rename-Item "shadercRelease.exe" "shaderc.exe"
+          }
+          Write-Host "Shaderc installed"
+
+      - name: Verify compiler installations
+        shell: pwsh
+        run: |
+          Write-Host "=== DXC ==="
+          $dxcPath = "$PWD\dxc\bin\x64\dxc.exe"
+          if (Test-Path $dxcPath) {
+            & $dxcPath --version
+          } else {
+            Write-Host "DXC not found at expected path"
+            Get-ChildItem dxc/ -Recurse -Filter "dxc.exe"
+          }
+          Write-Host ""
+          Write-Host "=== Shaderc ==="
+          if (Test-Path "$PWD\shaderc.exe") {
+            & "$PWD\shaderc.exe" --help 2>&1 | Select-Object -First 5
+          } else {
+            Write-Host "Shaderc not found"
+          }
+
+      - name: Run template generation script
+        shell: pwsh
+        run: |
+          Set-Location src
+          python script.py
+        continue-on-error: true
+
+      - name: Build shaders with Lazurite
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path build
+
+          # Set compiler paths
+          $dxcPath = "$PWD\dxc\bin\x64\dxc.exe"
+          $shadercPath = "$PWD\shaderc.exe"
+
+          Write-Host "=== LAZURITE BUILD ==="
+          Write-Host "Running build command..."
+
+          # Run lazurite build and capture output
+          $output = lazurite build project/ -o build/ --shaderc $shadercPath --dxc $dxcPath 2>&1
+          $buildStatus = $LASTEXITCODE
+
+          # Write output to log file (without URLs)
+          $output | Out-File -FilePath build/build.log -Encoding utf8
+
+          # Display output
+          $output | ForEach-Object { Write-Host $_ }
+
+          Write-Host ""
+          Write-Host "=== BUILD RESULT (exit code: $buildStatus) ==="
+          Write-Host "Build directory contents:"
+          Get-ChildItem build/
+
+          exit $buildStatus
+
+      - name: Upload shader artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openrtx-shader-${{ github.sha }}
+          path: |
+            build/*.material.bin
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Upload full build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: openrtx-full-build-${{ github.sha }}
+          path: build/
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Upload build log (always)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-log-${{ github.sha }}
+          path: build/build.log
+          retention-days: 7
+          if-no-files-found: warn
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: openrtx-shader-${{ github.sha }}
+          path: release/
+
+      - name: Create release archive
+        run: |
+          cd release
+          zip -r ../openrtx-shader.zip .
+
+      - name: Generate release tag
+        id: tag
+        run: |
+          echo "tag=v$(date +'%Y.%m.%d')-$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: OpenRTX Shader ${{ steps.tag.outputs.tag }}
+          body: |
+            ## OpenRTX Shader Build
+
+            Automated build from commit ${{ github.sha }}
+
+            ### Installation
+            1. Download `openrtx-shader.zip`
+            2. Extract the `.material.bin` files
+            3. Place in your Minecraft RTX resource pack
+
+            ### Features
+            - Physically-based BRDF (Frostbite Burley diffuse, GGX specular)
+            - Rayleigh/Mie atmospheric scattering
+            - Volumetric clouds with ray marching
+            - Advanced water rendering with waves
+            - Multiple tonemapping operators (ACES, Reinhard, etc.)
+            - Comprehensive post-processing effects
+          files: |
+            openrtx-shader.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

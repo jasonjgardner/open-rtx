@@ -1,0 +1,41 @@
+# OpenRTX Shader Build Environment
+# Usage: docker-compose up --build
+
+version: '3.8'
+
+services:
+  build:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VANILLA_BASE_URL: https://cdn.bedrock.graphics/vanilla/v23
+    volumes:
+      - ./build:/output
+    command: >
+      sh -c "cp /shader/build/*.material.bin /output/ 2>/dev/null ||
+             echo 'Build files copied to ./build/'"
+
+  dev:
+    image: jasongardner/dxc:latest
+    volumes:
+      - .:/shader
+      - ./build:/shader/build
+    working_dir: /shader
+    environment:
+      - VANILLA_BASE_URL=https://cdn.bedrock.graphics/vanilla/v23
+    command: >
+      sh -c "
+        apt-get update && apt-get install -y python3 python3-pip curl &&
+        pip3 install lazurite &&
+        curl -sL https://github.com/veka0/bgfx-mcbe/releases/download/binaries/shaderc -o /usr/local/bin/shaderc &&
+        chmod +x /usr/local/bin/shaderc &&
+        mkdir -p vanilla build &&
+        curl -sL $${VANILLA_BASE_URL}/RTXStub.material.bin -o vanilla/RTXStub.material.bin &&
+        curl -sL $${VANILLA_BASE_URL}/RTXPostFX.material.bin -o vanilla/RTXPostFX.material.bin &&
+        curl -sL $${VANILLA_BASE_URL}/RTXPostFX.Tonemapping.material.bin -o vanilla/RTXPostFX.Tonemapping.material.bin &&
+        curl -sL $${VANILLA_BASE_URL}/RTXPostFX.Bloom.material.bin -o vanilla/RTXPostFX.Bloom.material.bin &&
+        lazurite build project/ -o build/ &&
+        echo 'Build complete!' &&
+        ls -la build/
+      "
