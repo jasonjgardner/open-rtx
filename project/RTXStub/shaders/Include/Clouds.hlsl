@@ -33,16 +33,10 @@
 #include "Settings.hlsl"
 
 // =============================================================================
-// PHASE FUNCTIONS (local copy to avoid circular dependency with Sky.hlsl)
+// PHASE FUNCTIONS (use Sky.hlsl's phaseMieHG - already included via OpenRTX.hlsl)
 // =============================================================================
 
-// Henyey-Greenstein phase function for Mie scattering
-float phaseMieHG(float cosTheta, float g)
-{
-    float g2 = g * g;
-    float denom = 1.0 + g2 - 2.0 * g * cosTheta;
-    return (1.0 - g2) / (4.0 * kPi * pow(abs(denom), 1.5));
-}
+// phaseMieHG is defined in Sky.hlsl which is included before Clouds.hlsl
 
 // =============================================================================
 // NOISE FUNCTIONS
