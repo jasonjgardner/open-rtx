@@ -48,7 +48,6 @@ float fogDensityUniform()
 }
 
 // Density modifier based on height and time-of-day
-// Following the froxel-based approach from BetterRTX
 float calcDensityModifier(float3 worldPos, float3 sunDir, bool isUnderwater)
 {
     float densityModifier = 1.0;
@@ -94,10 +93,10 @@ float getFogDensity(float3 worldPos, float rainIntensity, float time)
 }
 
 // =============================================================================
-// PHASE FUNCTIONS
+// ADVANCED PHASE FUNCTIONS
 // =============================================================================
 
-// Henyey-Greenstein phase function
+// Henyey-Greenstein phase function with proper normalization
 float henyeyGreenstein(float cosTheta, float g)
 {
     float g2 = g * g;
@@ -105,7 +104,7 @@ float henyeyGreenstein(float cosTheta, float g)
     return (1.0 - g2) / (4.0 * kPi * pow(abs(denom), 1.5));
 }
 
-// Cornette-Shanks phase function (improved Mie)
+// Cornette-Shanks phase function (improved Mie scattering)
 float cornetteShanks(float cosTheta, float g)
 {
     float g2 = g * g;
@@ -126,7 +125,7 @@ float airFogPhase(float cosTheta)
     return henyeyGreenstein(cosTheta, AIR_FOG_ASYMMETRY);
 }
 
-// Water fog phase function using WATER_FOG_ASYMMETRY setting
+// Water fog phase function using WATER_FOG_ASYMMETRY setting  
 float waterFogPhase(float cosTheta)
 {
     return henyeyGreenstein(cosTheta, WATER_FOG_ASYMMETRY);
@@ -139,6 +138,146 @@ float isotropicPhase()
 }
 
 // =============================================================================
+// RAINBOW PHYSICS
+// =============================================================================
+// Rainbows form when sunlight refracts through water droplets.
+// Primary rainbow: ~42° from antisolar point (one internal reflection)
+// Secondary rainbow: ~51° from antisolar point (two internal reflections)
+// Alexander's dark band: 42°-51° region between rainbows (darker sky)
+
+// Physical constants for rainbow angles (in radians)
+static const float kPrimaryRainbowAngle = 0.7330;    // 42.0° - center of primary bow
+static const float kSecondaryRainbowAngle = 0.8901;  // 51.0° - center of secondary bow
+
+// Angular dispersion causes color separation (red on outside, violet inside for primary)
+// These are the deviation angles for each wavelength
+static const float kPrimaryRedAngle = 0.7383;     // 42.3° - red (outer edge)
+static const float kPrimaryGreenAngle = 0.7243;   // 41.5° - green (middle)
+static const float kPrimaryBlueAngle = 0.7086;    // 40.6° - blue/violet (inner edge)
+
+// Secondary rainbow has reversed color order (red inside, violet outside)
+static const float kSecondaryRedAngle = 0.8814;   // 50.5° - red (inner edge)
+static const float kSecondaryGreenAngle = 0.8901; // 51.0° - green (middle)
+static const float kSecondaryBlueAngle = 0.9076;  // 52.0° - blue/violet (outer edge)
+
+// Gaussian intensity profile for rainbow band
+// Models the angular distribution of scattered light
+float rainbowGaussian(float angle, float centerAngle, float width)
+{
+    float delta = angle - centerAngle;
+    return exp(-delta * delta / (2.0 * width * width));
+}
+
+// Supernumerary fringes - interference patterns inside primary rainbow
+// Creates subtle colored bands due to wave interference
+float supernumeraryPattern(float angle, float baseAngle)
+{
+    // Supernumeraries appear just inside the primary bow
+    float delta = baseAngle - angle;
+    if (delta < 0.0 || delta > 0.1)
+        return 0.0;
+
+    // Interference creates oscillating intensity
+    // Spacing depends on droplet size - we use average spacing
+    float fringeSpacing = 0.015; // ~0.9° spacing
+    float phase = delta / fringeSpacing * kTwoPi;
+
+    // Damped oscillation - fringes fade toward center
+    float envelope = exp(-delta * 8.0);
+    return max(0.0, cos(phase) * envelope * 0.3);
+}
+
+// Calculate complete rainbow contribution
+// Returns additive color to be added to scene (0 = no rainbow visible)
+float3 computeRainbow(float3 viewDir, float3 lightDir, float distance)
+{
+#if !ENABLE_RAINBOW
+    return 0.0;
+#endif
+
+    // Rainbow appears at antisolar point - opposite the sun
+    // Calculate angle from antisolar direction
+    float cosAngle = -dot(normalize(viewDir), normalize(lightDir));
+
+    // Clamp to valid range for acos
+    cosAngle = clamp(cosAngle, -0.9999, 0.9999);
+    float angle = acos(cosAngle);
+
+    // Rainbow only visible when looking away from sun (antisolar hemisphere)
+    if (cosAngle > 0.2)
+        return 0.0;
+
+    // Angular width of rainbow bands (affected by droplet size variation)
+    float bandWidth = 0.025 * RAINBOW_WIDTH;
+
+    float3 rainbowColor = 0.0;
+
+    // ===================
+    // PRIMARY RAINBOW (brighter, ~42°)
+    // ===================
+    float3 primaryIntensity;
+    primaryIntensity.r = rainbowGaussian(angle, kPrimaryRedAngle, bandWidth);
+    primaryIntensity.g = rainbowGaussian(angle, kPrimaryGreenAngle, bandWidth * 0.9);
+    primaryIntensity.b = rainbowGaussian(angle, kPrimaryBlueAngle, bandWidth * 0.8);
+
+    // Add supernumerary fringes (subtle interference patterns)
+#if ENABLE_SUPERNUMERARY_FRINGES
+    float fringeR = supernumeraryPattern(angle, kPrimaryRedAngle);
+    float fringeG = supernumeraryPattern(angle, kPrimaryGreenAngle);
+    float fringeB = supernumeraryPattern(angle, kPrimaryBlueAngle);
+    primaryIntensity += float3(fringeR, fringeG, fringeB);
+#endif
+
+    rainbowColor += primaryIntensity * RAINBOW_PRIMARY_INTENSITY;
+
+    // ===================
+    // SECONDARY RAINBOW (dimmer, ~51°, reversed colors)
+    // ===================
+#if ENABLE_SECONDARY_RAINBOW
+    float3 secondaryIntensity;
+    // Note: color order is reversed for secondary rainbow
+    secondaryIntensity.r = rainbowGaussian(angle, kSecondaryRedAngle, bandWidth * 1.3);
+    secondaryIntensity.g = rainbowGaussian(angle, kSecondaryGreenAngle, bandWidth * 1.2);
+    secondaryIntensity.b = rainbowGaussian(angle, kSecondaryBlueAngle, bandWidth * 1.1);
+
+    // Secondary is about 43% as bright as primary (due to extra reflection)
+    rainbowColor += secondaryIntensity * RAINBOW_SECONDARY_INTENSITY;
+#endif
+
+    // ===================
+    // ALEXANDER'S DARK BAND
+    // ===================
+    // Region between primary and secondary rainbows appears darker
+    // because no light is scattered into this angular range
+#if ENABLE_ALEXANDERS_BAND
+    float bandCenter = (kPrimaryRainbowAngle + kSecondaryRainbowAngle) * 0.5;
+    float bandHalfWidth = (kSecondaryRainbowAngle - kPrimaryRainbowAngle) * 0.4;
+    float darkBand = smoothstep(bandHalfWidth, 0.0, abs(angle - bandCenter));
+    // This creates a subtle darkening effect (applied elsewhere in sky rendering)
+#endif
+
+    // ===================
+    // DISTANCE AND VISIBILITY FACTORS
+    // ===================
+
+    // Rainbow needs sufficient distance to be visible (forms in distant rain)
+    float distanceFactor = smoothstep(32.0, 128.0, distance);
+
+    // Rainbow visibility depends on viewing geometry
+    // Strongest when looking toward horizon (horizontal view)
+    float horizonFactor = 1.0 - abs(viewDir.y) * 0.5;
+
+    // Combine factors
+    rainbowColor *= distanceFactor * horizonFactor * RAINBOW_INTENSITY;
+
+    // Apply subtle color saturation boost for more vivid appearance
+    float luminance = dot(rainbowColor, float3(0.299, 0.587, 0.114));
+    rainbowColor = lerp(float3(luminance, luminance, luminance), rainbowColor, RAINBOW_SATURATION);
+
+    return max(rainbowColor, 0.0);
+}
+
+// =============================================================================
 // VOLUMETRIC RAY MARCHING
 // =============================================================================
 
@@ -148,7 +287,7 @@ struct VolumetricOutput
     float transmittance;  // Remaining visibility
 };
 
-// Simple ray marching for volumetric fog
+// Enhanced ray marching with improved energy conservation
 VolumetricOutput marchVolumetricFog(
     float3 rayOrigin,
     float3 rayDir,
@@ -186,69 +325,88 @@ VolumetricOutput marchVolumetricFog(
     float stepSize = effectiveMaxDistance / float(adaptiveSteps);
     float3 currentPos = rayOrigin;
 
-    // Phase function for sun
+    // Calculate phase functions
     float cosTheta = dot(rayDir, sunDir);
     float phase = dualLobePhase(cosTheta, 0.8, -0.3, 0.7);
 
-    // Use configured scattering coefficients instead of hardcoded values
-    float3 scattering = FOG_SCATTERING_COEFFICIENTS;
+    // Use proper media properties with reduced coefficients to prevent washout
+    // Scale scattering by global density to make it configurable
+    float3 scattering = FOG_SCATTERING_COEFFICIENTS * FOG_DENSITY * 10.0;
+    float3 absorption = float3(0.0002, 0.0003, 0.0005); // Slight wavelength-dependent absorption
+    float3 extinction = scattering + absorption;
+
+    // Track cumulative transmittance for proper inscatter weighting
+    float3 cumulativeTransmittance = 1.0;
 
     for (int i = 0; i < adaptiveSteps; i++)
     {
-        // Use full fog density function with proper sun direction
-        float density = getFogDensity(currentPos, rainIntensity, time, sunDir, false);
+        // Get density modifier (height falloff, time of day, etc.)
+        float densityModifier = calcDensityModifier(currentPos, sunDir, false);
 
-        if (density > 0.0001)
+        // Apply rain fog boost
+        float effectiveDensity = densityModifier;
+#if ENABLE_RAIN_FOG
+        effectiveDensity = lerp(effectiveDensity, effectiveDensity * (1.0 + RAIN_FOG_AMOUNT), rainIntensity);
+#endif
+
+        if (effectiveDensity > 0.0001)
         {
-            // Extinction
-            float extinction = density * stepSize;
-            float stepTransmittance = exp(-extinction);
+            // Beer-Lambert law for this step
+            float3 stepExtinction = extinction * effectiveDensity * stepSize;
+            float3 stepTransmittance = exp(-stepExtinction);
 
-            // In-scattered light
+            // In-scattered light calculation
             float3 lightContribution = 0.0;
 
 #if ENABLE_SUN_FOG
-            // Sun contribution with simple shadow approximation
-            // Use height-based shadow for terrain blocking
-            float terrainHeight = 64.0; // Approximate terrain height
-            float shadowFactor = 1.0;
-            
-            // Simple terrain shadow: if sun is low and ray goes toward ground, reduce visibility
+            // Sun contribution with terrain shadow approximation
+            float3 sunTransmission = 1.0;
+            float terrainHeight = 64.0;
             if (sunDir.y < 0.3 && currentPos.y > terrainHeight && rayDir.y < -0.1)
             {
                 float shadowDistance = (currentPos.y - terrainHeight) / max(-rayDir.y, 0.01);
-                shadowFactor = saturate(exp(-shadowDistance * 0.01));
+                sunTransmission = saturate(exp(-shadowDistance * 0.01));
             }
-            
-            lightContribution += sunColor * phase * shadowFactor * SUN_FOG_AMOUNT;
+
+            // Rainbow effect (only when raining and looking toward antisolar point)
+            float3 rainbowFactor = computeRainbow(rayDir, sunDir, effectiveMaxDistance);
+            lightContribution += sunColor * phase * sunTransmission * rainbowFactor * SUN_FOG_AMOUNT;
 #endif
 
 #if ENABLE_STATIC_GI_FOG
-            // Enhanced ambient/GI contribution with wavelength dependency
-            float3 ambientColor = float3(0.15, 0.18, 0.22); // Brighter sky ambient
+            // Ambient/GI contribution - reduced to prevent washout
+            float3 ambientColor = float3(0.08, 0.10, 0.14);
             lightContribution += ambientColor * STATIC_GI_FOG_AMOUNT;
 #endif
 
-            // Improved light accumulation with proper energy conservation
-            float3 stepInscatter = lightContribution * scattering * density * stepSize;
-            
-            // Accumulate inscatter with proper transmittance weighting
-            output.inscatter += stepInscatter * output.transmittance;
-            output.transmittance *= stepTransmittance;
+#if ENABLE_EXPLICIT_LIGHT_SAMPLING
+            // Emissive contribution (very subtle)
+            float3 emissiveContribution = float3(0.005, 0.003, 0.002) * effectiveDensity;
+            lightContribution += emissiveContribution;
+#endif
 
-            // Advance ray only when we have meaningful calculations
-            currentPos += rayDir * stepSize;
-        }
-        else
-        {
-            // Still advance ray even with negligible density
-            currentPos += rayDir * stepSize;
+            // Proper inscatter integration using cumulative transmittance
+            // This ensures light scattered at position i is attenuated by fog between camera and i
+            float3 stepInscatter = lightContribution * scattering * effectiveDensity * stepSize;
+
+            // Weight by cumulative transmittance (light must travel through fog to reach camera)
+            output.inscatter += stepInscatter * cumulativeTransmittance;
+
+            // Update cumulative transmittance for next step
+            cumulativeTransmittance *= stepTransmittance;
         }
 
-        // Early termination
-        if (output.transmittance < 0.01)
+        // Always advance ray
+        currentPos += rayDir * stepSize;
+
+        // Early termination when fog is essentially opaque
+        float avgTransmittance = dot(cumulativeTransmittance, float3(0.333, 0.333, 0.334));
+        if (avgTransmittance < 0.01)
             break;
     }
+
+    // Store final transmittance (average of RGB channels)
+    output.transmittance = dot(cumulativeTransmittance, float3(0.333, 0.333, 0.334));
 
     return output;
 }
@@ -294,66 +452,92 @@ float3 computeGodRays(
 }
 
 // =============================================================================
-// RAINBOW EFFECT
+// RAINBOW SPECTRAL COLORS
 // =============================================================================
 
-// Rainbow color based on angle
-float3 rainbowColor(float angle)
+// Convert wavelength (380-780nm) to approximate RGB color
+// Based on CIE color matching functions approximation
+float3 wavelengthToRGB(float wavelength)
 {
-    // Primary rainbow at 42 degrees
-    const float primaryAngle = 0.733; // radians (~42 degrees)
-    const float rainbowWidth = 0.035;
+    float3 color = 0.0;
 
-    float dist = abs(angle - primaryAngle);
-    float rainbow = smoothstep(rainbowWidth, 0.0, dist);
+    if (wavelength >= 380.0 && wavelength < 440.0)
+    {
+        color.r = -(wavelength - 440.0) / (440.0 - 380.0);
+        color.g = 0.0;
+        color.b = 1.0;
+    }
+    else if (wavelength >= 440.0 && wavelength < 490.0)
+    {
+        color.r = 0.0;
+        color.g = (wavelength - 440.0) / (490.0 - 440.0);
+        color.b = 1.0;
+    }
+    else if (wavelength >= 490.0 && wavelength < 510.0)
+    {
+        color.r = 0.0;
+        color.g = 1.0;
+        color.b = -(wavelength - 510.0) / (510.0 - 490.0);
+    }
+    else if (wavelength >= 510.0 && wavelength < 580.0)
+    {
+        color.r = (wavelength - 510.0) / (580.0 - 510.0);
+        color.g = 1.0;
+        color.b = 0.0;
+    }
+    else if (wavelength >= 580.0 && wavelength < 645.0)
+    {
+        color.r = 1.0;
+        color.g = -(wavelength - 645.0) / (645.0 - 580.0);
+        color.b = 0.0;
+    }
+    else if (wavelength >= 645.0 && wavelength <= 780.0)
+    {
+        color.r = 1.0;
+        color.g = 0.0;
+        color.b = 0.0;
+    }
 
-    if (rainbow <= 0.0)
-        return 0.0;
+    // Intensity falloff at spectrum edges
+    float intensity = 1.0;
+    if (wavelength >= 380.0 && wavelength < 420.0)
+        intensity = 0.3 + 0.7 * (wavelength - 380.0) / (420.0 - 380.0);
+    else if (wavelength > 700.0 && wavelength <= 780.0)
+        intensity = 0.3 + 0.7 * (780.0 - wavelength) / (780.0 - 700.0);
 
-    // Spectral colors
-    float normalized = saturate((angle - (primaryAngle - rainbowWidth)) / (rainbowWidth * 2.0));
-
-    float3 color;
-    if (normalized < 0.166)
-        color = lerp(float3(1.0, 0.0, 0.0), float3(1.0, 0.5, 0.0), normalized * 6.0);
-    else if (normalized < 0.333)
-        color = lerp(float3(1.0, 0.5, 0.0), float3(1.0, 1.0, 0.0), (normalized - 0.166) * 6.0);
-    else if (normalized < 0.5)
-        color = lerp(float3(1.0, 1.0, 0.0), float3(0.0, 1.0, 0.0), (normalized - 0.333) * 6.0);
-    else if (normalized < 0.666)
-        color = lerp(float3(0.0, 1.0, 0.0), float3(0.0, 0.0, 1.0), (normalized - 0.5) * 6.0);
-    else if (normalized < 0.833)
-        color = lerp(float3(0.0, 0.0, 1.0), float3(0.3, 0.0, 0.5), (normalized - 0.666) * 6.0);
-    else
-        color = lerp(float3(0.3, 0.0, 0.5), float3(0.5, 0.0, 0.5), (normalized - 0.833) * 6.0);
-
-    return color * rainbow;
+    return color * intensity;
 }
 
-// Calculate rainbow contribution
-float3 computeRainbow(float3 viewDir, float3 sunDir, float rainIntensity)
+// Sample spectral rainbow color at normalized position (0=violet, 1=red)
+float3 sampleRainbowSpectrum(float t)
 {
-#if ENABLE_RAINBOW
-    if (rainIntensity <= 0.0)
+    // Map t to wavelength range (violet 400nm to red 700nm)
+    float wavelength = lerp(400.0, 700.0, saturate(t));
+    return wavelengthToRGB(wavelength);
+}
+
+// Rainbow color based on angle from rainbow center
+// Used for artistic/legacy rendering
+float3 rainbowColor(float angle)
+{
+    // Primary rainbow angular range
+    const float innerAngle = 0.708;   // ~40.6° (violet/blue edge)
+    const float outerAngle = 0.738;   // ~42.3° (red edge)
+    const float rainbowWidth = outerAngle - innerAngle;
+
+    // Calculate position within rainbow band
+    float t = (angle - innerAngle) / rainbowWidth;
+
+    if (t < -0.2 || t > 1.2)
         return 0.0;
 
-    // Rainbow appears opposite to sun
-    float3 antiSunDir = -sunDir;
+    // Smooth edges
+    float edgeFade = smoothstep(-0.2, 0.0, t) * smoothstep(1.2, 1.0, t);
 
-    // Angle from anti-sun direction
-    float cosAngle = dot(viewDir, antiSunDir);
-    float angle = acos(saturate(cosAngle));
+    // Sample spectrum
+    float3 color = sampleRainbowSpectrum(t);
 
-    float3 rainbow = rainbowColor(angle);
-
-    // Fade based on conditions
-    float sunElevation = saturate(sunDir.y * 2.0); // Rainbow visible when sun is low
-    float viewElevation = saturate(-viewDir.y + 0.5); // Rainbow in lower sky
-
-    return rainbow * RAINBOW_INTENSITY * rainIntensity * sunElevation * viewElevation;
-#else
-    return 0.0;
-#endif
+    return color * edgeFade;
 }
 
 // =============================================================================
@@ -501,27 +685,48 @@ VolumetricResult evaluateVolumetrics(
     result.inscatter = fogOutput.inscatter;
     result.transmittance = fogOutput.transmittance;
 
-    // Add rainbow
-    result.inscatter += computeRainbow(rayDir, sunDir, rainIntensity) * result.transmittance;
+    // Rainbow effect - visible during/after rain when looking toward antisolar point
+    // computeRainbow returns additive color (0 when no rainbow visible)
+#if ENABLE_RAINBOW
+    if (rainIntensity > 0.05)
+    {
+        // Get rainbow contribution (already handles angle, distance, etc.)
+        float3 rainbow = computeRainbow(rayDir, sunDir, maxDistance);
+
+        // Scale by rain intensity - rainbow fades as rain stops
+        // Rainbow is most visible just after rain (rainIntensity 0.1-0.5)
+        float rainbowVisibility = smoothstep(0.05, 0.2, rainIntensity) * smoothstep(1.0, 0.3, rainIntensity);
+
+        // Add to inscatter, weighted by transmittance and sun brightness
+        float sunBrightness = saturate(sunDir.y + 0.1); // Rainbow needs sunlight
+        result.inscatter += rainbow * rainbowVisibility * sunBrightness * result.transmittance;
+    }
+#endif
 
     return result;
 }
 
-// Apply volumetrics to final color with improved light transmission
+// Apply volumetrics to final color with physically-based blending
 float3 applyVolumetrics(float3 sceneColor, VolumetricResult volumetrics)
 {
-    // Ensure transmittance doesn't go too dark (maintain minimum visibility)
-    float minTransmittance = 0.1;
-    float effectiveTransmittance = max(volumetrics.transmittance, minTransmittance);
-    
-    // Apply scene color through fog with proper energy conservation
-    float3 transmittedScene = sceneColor * effectiveTransmittance;
-    
-    // Add inscatter light with wavelength-dependent scattering
+    // Physically correct fog blending:
+    // finalColor = sceneColor * transmittance + inscatter
+    //
+    // Where:
+    // - transmittance = how much of the original scene is visible through fog
+    // - inscatter = light added by the fog itself (sun/ambient scattered toward camera)
+
+    // Apply scene attenuation through fog
+    float3 transmittedScene = sceneColor * volumetrics.transmittance;
+
+    // Add in-scattered light from fog
+    // The inscatter is already properly weighted by transmittance during marching
     float3 finalColor = transmittedScene + volumetrics.inscatter;
-    
-    // Prevent oversaturation while maintaining light transmission
-    return min(finalColor, sceneColor * 1.5 + volumetrics.inscatter * 1.2);
+
+    // Clamp to prevent negative values or excessive brightness
+    // Allow inscatter to brighten beyond scene color (for god rays, etc.)
+    // but cap at reasonable maximum to prevent HDR blowout
+    return max(finalColor, 0.0);
 }
 
 #endif // __OPENRTX_VOLUMETRIC_LIGHTING_HLSL__

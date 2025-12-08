@@ -493,17 +493,29 @@
 // VOLUMETRIC LIGHTING SETTINGS
 // =============================================================================
 
-// Fog parameters
+// Fog density - controls overall fog thickness
+// Lower values = more transparent fog, higher = thicker fog
+// 0.0002 = subtle atmospheric haze
+// 0.0005 = light fog (recommended default)
+// 0.001  = moderate fog
+// 0.002+ = heavy fog (may wash out scene)
 #ifndef FOG_DENSITY
-#define FOG_DENSITY 0.001
+#define FOG_DENSITY 0.0003  // Subtle atmospheric haze
 #endif
 
+// Height-based fog falloff - how quickly fog thins with altitude
+// Higher values = fog concentrated near ground
+// 0.02 = gentle falloff (fog extends high)
+// 0.05 = moderate falloff
+// 0.1  = strong falloff (fog near ground only)
 #ifndef FOG_HEIGHT_FALLOFF
-#define FOG_HEIGHT_FALLOFF 0.1
+#define FOG_HEIGHT_FALLOFF 0.03
 #endif
 
+// Maximum distance for volumetric fog calculation
+// Beyond this distance, no additional fog is added
 #ifndef FOG_MAX_DISTANCE
-#define FOG_MAX_DISTANCE 256.0  // Blocks (VOLUMETRIC_FOG_RANGE equivalent)
+#define FOG_MAX_DISTANCE 256.0  // Blocks
 #endif
 
 // Phase function asymmetry (Henyey-Greenstein g parameter)
@@ -519,54 +531,113 @@
 #endif
 
 // Fog scattering coefficients (RGB wavelength-dependent)
+// Higher blue values create warm/golden fog, higher red creates cool/blue fog
+// These are multiplied by FOG_DENSITY during rendering
 #ifndef FOG_SCATTERING_COEFFICIENTS
-#define FOG_SCATTERING_COEFFICIENTS float3(0.002, 0.00184, 0.0015)  // Rayleigh-like
+#define FOG_SCATTERING_COEFFICIENTS float3(0.06, 0.08, 0.12)  // Slight blue atmospheric tint
 #endif
 
-// Noon fog reduction (1.0 = no reduction at midday)
+// Noon fog reduction - reduces fog at midday for clearer visibility
+// 1.0 = no reduction, 0.5 = 50% less fog at noon
 #ifndef NOON_FOG_REDUCTION
-#define NOON_FOG_REDUCTION 0.7  // 30% less fog at noon
+#define NOON_FOG_REDUCTION 0.6  // 40% less fog at noon
 #endif
 
-// Volumetric ray marching
+// Volumetric ray marching steps
+// Higher = better quality, lower = better performance
+// 16 = fast, 32 = balanced, 64 = high quality
 #ifndef VOLUMETRIC_STEPS
-#define VOLUMETRIC_STEPS 32
+#define VOLUMETRIC_STEPS 24
 #endif
 
-// Static GI fog
+// Static GI fog - ambient light scattered by fog
 #ifndef ENABLE_STATIC_GI_FOG
 #define ENABLE_STATIC_GI_FOG 1
 #endif
 
+// GI fog intensity - how much ambient light fog scatters
+// Lower values prevent fog from adding too much brightness
 #ifndef STATIC_GI_FOG_AMOUNT
-#define STATIC_GI_FOG_AMOUNT 0.3
+#define STATIC_GI_FOG_AMOUNT 0.15
 #endif
 
-// Sun fog
+// Sun fog - directional light scattered by fog (god rays)
 #ifndef ENABLE_SUN_FOG
 #define ENABLE_SUN_FOG 1
 #endif
 
+// Sun fog intensity - how much sunlight fog scatters
+// Controls god ray intensity
 #ifndef SUN_FOG_AMOUNT
-#define SUN_FOG_AMOUNT 0.5
+#define SUN_FOG_AMOUNT 0.3
 #endif
 
-// Rain fog
+// Rain fog - increased fog density during rain
 #ifndef ENABLE_RAIN_FOG
 #define ENABLE_RAIN_FOG 1
 #endif
 
+// Rain fog multiplier - how much denser fog gets during rain
 #ifndef RAIN_FOG_AMOUNT
-#define RAIN_FOG_AMOUNT 0.8
+#define RAIN_FOG_AMOUNT 0.5
 #endif
 
-// Rainbow
+// =============================================================================
+// RAINBOW SETTINGS
+// =============================================================================
+
+// Master toggle for rainbow effect during/after rain
 #ifndef ENABLE_RAINBOW
 #define ENABLE_RAINBOW 1
 #endif
 
+// Enable secondary rainbow (fainter, at ~51° with reversed colors)
+#ifndef ENABLE_SECONDARY_RAINBOW
+#define ENABLE_SECONDARY_RAINBOW 1
+#endif
+
+// Enable supernumerary fringes (subtle interference patterns inside primary bow)
+#ifndef ENABLE_SUPERNUMERARY_FRINGES
+#define ENABLE_SUPERNUMERARY_FRINGES 1
+#endif
+
+// Enable Alexander's dark band (darker region between primary and secondary)
+#ifndef ENABLE_ALEXANDERS_BAND
+#define ENABLE_ALEXANDERS_BAND 1
+#endif
+
+// Overall rainbow visibility multiplier
+// Higher = more visible rainbow, 0 = invisible
 #ifndef RAINBOW_INTENSITY
-#define RAINBOW_INTENSITY 0.3
+#define RAINBOW_INTENSITY 1.5
+#endif
+
+// Primary rainbow intensity (brightest bow at ~42°)
+#ifndef RAINBOW_PRIMARY_INTENSITY
+#define RAINBOW_PRIMARY_INTENSITY 1.0
+#endif
+
+// Secondary rainbow intensity (dimmer bow at ~51°)
+// Physically should be ~43% of primary
+#ifndef RAINBOW_SECONDARY_INTENSITY
+#define RAINBOW_SECONDARY_INTENSITY 0.4
+#endif
+
+// Rainbow band width multiplier
+// 1.0 = physically accurate, higher = wider/softer bands
+#ifndef RAINBOW_WIDTH
+#define RAINBOW_WIDTH 1.0
+#endif
+
+// Rainbow color saturation
+// 1.0 = natural, higher = more vivid colors
+#ifndef RAINBOW_SATURATION
+#define RAINBOW_SATURATION 1.3
+#endif
+
+// Explicit light sampling for emissive blocks in fog
+#ifndef ENABLE_EXPLICIT_LIGHT_SAMPLING
+#define ENABLE_EXPLICIT_LIGHT_SAMPLING 1
 #endif
 
 // =============================================================================

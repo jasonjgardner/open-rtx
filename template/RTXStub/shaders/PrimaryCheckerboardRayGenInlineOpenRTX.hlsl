@@ -1153,13 +1153,6 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
     if (isOpaque)
         surfaceInfo.alpha = 1;
 
-    // Cloud special handling
-    if (objectInstance.flags & kObjectInstanceFlagClouds)
-    {
-        light = geometryInfo.color.rgb;
-        surfaceInfo.alpha = 0.7;
-    }
-
     // Point lights with shadow
     for (int i = 0; i < min(10, g_view.cpuLightsCount); i++)
     {

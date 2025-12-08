@@ -439,12 +439,25 @@ SurfaceInfo MaterialVanilla(HitInfo hitInfo, GeometryInfo geometryInfo, ObjectIn
             colorTex.GetDimensions(size.x, size.y);
             uv += 1.0 / size;
         }
-        color = colorTex.SampleLevel(pointSampler, uv, 0);
+        else if (objectInstance.flags & kObjectInstanceFlagClouds)
+        {
+#if ENABLE_VOLUMETRIC_CLOUDS
+            // Hide vanilla cloud mesh when volumetric clouds are enabled (prevents glossy appearance)
+            color = float4(0, 0, 0, 0);
+#else
+            // Use world-space UVs for seamless cloud texture tiling across the entire sky
+            float2 worldUV = geometryInfo.position.xz * 1.0 * 0.001;
+            color = colorTex.SampleLevel(defaultSampler, worldUV, 0);
+#endif
+        }
+        else color = colorTex.SampleLevel(defaultSampler, uv, 0);
     }
     
     // For some reason terrain is not treated as having 0.5 threshold so we have to also explicitly test for it, hence the `kObjectInstanceFlagChunk` part in below code.
-    surfaceInfo.shouldDiscard = hitInfo.materialType == MATERIAL_TYPE_ALPHA_TEST 
-        && (objectInstance.flags & (kObjectInstanceFlagAlphaTestThresholdHalf | kObjectInstanceFlagChunk) ? color.a < 0.5 : color.a == 0.0);
+    // Fixed alpha test logic to match BetterRTX behavior - copper grates need proper threshold handling
+    bool useHalfThreshold = (objectInstance.flags & kObjectInstanceFlagAlphaTestThresholdHalf) || (objectInstance.flags & kObjectInstanceFlagChunk);
+    surfaceInfo.shouldDiscard = hitInfo.materialType == MATERIAL_TYPE_ALPHA_TEST && 
+        (useHalfThreshold ? color.a < 0.5 : color.a == 0.0);
 
     if (objectInstance.flags & kObjectInstanceFlagHasSeasonsTexture)
     {

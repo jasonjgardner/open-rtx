@@ -245,10 +245,15 @@ jobs:
             ### Features
             - Physically-based BRDF (Frostbite Burley diffuse, GGX specular)
             - Rayleigh/Mie atmospheric scattering
-            - Volumetric clouds with ray marching
-            - Advanced water rendering with waves
-            - Multiple tonemapping operators (ACES, Reinhard, etc.)
-            - Comprehensive post-processing effects
+            - Enhanced volumetric lighting and fog
+            - Advanced water rendering with waves and caustics
+            - Multiple tonemapping operators (ACES, Reinhard, Uncharted 2, etc.)
+            - Comprehensive post-processing effects (bloom, lens flare, chromatic aberration)
+            - Ray-traced reflections and shadows with color transmission
+            - Enhanced cloud rendering with puffy geometry
+            
+            ### TODO / In Development
+            - Volumetric clouds with ray marching (currently disabled, using enhanced vanilla clouds)
           files: |
             openrtx-shader.zip
           draft: false
