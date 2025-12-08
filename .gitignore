@@ -3,6 +3,12 @@
 *.exe
 *.dll
 
+# Generated project folder (regenerate with: python src/script.py)
+project/
+
+# Build output
+output/
+
 # Vanilla materials (downloaded during build)
 vanilla/*.material.bin
 

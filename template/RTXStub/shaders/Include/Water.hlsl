@@ -366,11 +366,35 @@ float calculateFoam(float2 pos, float time, float depth, float waveHeight)
 // FRESNEL AND REFLECTION
 // =============================================================================
 
-// Water Fresnel
-float waterFresnel(float NdotV, float eta)
+// Water Fresnel using accurate dielectric Fresnel equations
+// For air-to-water: ior = WATER_IOR (1.333)
+// Returns reflectance at given angle
+float waterFresnel(float NdotV, float ior)
 {
-    // Schlick approximation
-    float f0 = pow((1.0 - eta) / (1.0 + eta), 2.0);
+    // Use full Fresnel equations for accuracy, especially at grazing angles
+    float cosTheta = NdotV;
+    float eta = 1.0 / ior;  // Air to water ratio
+
+    float sinThetaTSq = eta * eta * (1.0 - cosTheta * cosTheta);
+
+    // Total internal reflection check (shouldn't happen for air-to-water looking down)
+    if (sinThetaTSq > 1.0)
+        return 1.0;
+
+    float cosThetaT = sqrt(1.0 - sinThetaTSq);
+
+    // Fresnel equations for s and p polarization
+    float rs = (eta * cosTheta - cosThetaT) / (eta * cosTheta + cosThetaT);
+    float rp = (cosTheta - eta * cosThetaT) / (cosTheta + eta * cosThetaT);
+
+    // Average of s and p polarization (unpolarized light)
+    return (rs * rs + rp * rp) * 0.5;
+}
+
+// Schlick approximation for water Fresnel (faster, less accurate at grazing angles)
+float waterFresnelSchlick(float NdotV, float ior)
+{
+    float f0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
     return f0 + (1.0 - f0) * pow(1.0 - NdotV, 5.0);
 }
 
@@ -431,6 +455,26 @@ float3 applyCaustics(float3 worldPos, float3 surfaceColor, float3 lightDir, floa
     return surfaceColor * (1.0 + caustics * falloff * lightFactor);
 #else
     return surfaceColor;
+#endif
+}
+
+// Get raw caustics value for a world position (used for underwater surface lighting)
+float3 waterCaustics(float3 worldPos, float time, float3 lightDir)
+{
+#if ENABLE_CAUSTICS
+    // Project onto XZ plane for caustic pattern
+    float2 causticPos = worldPos.xz;
+
+    // Sample caustics pattern
+    float caustics = causticPattern(causticPos, time * CAUSTICS_SPEED);
+
+    // Light direction affects intensity (caustics are stronger with overhead sun)
+    float lightFactor = saturate(lightDir.y);
+
+    // Return as light color contribution (white/cyan tinted)
+    return float3(0.9, 1.0, 1.0) * caustics * lightFactor;
+#else
+    return 0.0;
 #endif
 }
 
@@ -495,11 +539,11 @@ WaterSurface evaluateWaterSurface(float3 basePosition, float3 viewDir, float tim
     float depth = 0.0; // Would need actual depth buffer
     water.foam = calculateFoam(pos2D, time, depth, waveHeight);
 
-    // Fresnel
+    // Fresnel - use accurate dielectric Fresnel with water IOR
     float NdotV = saturate(dot(water.normal, viewDir));
-    water.fresnel = waterFresnel(NdotV, 1.0 / WATER_IOR);
+    water.fresnel = waterFresnel(NdotV, WATER_IOR);
 
-    // Refraction direction
+    // Refraction direction (HLSL refract expects eta = n1/n2 for air-to-water)
     water.refractDir = refract(-viewDir, water.normal, 1.0 / WATER_IOR);
 
     return water;
@@ -515,6 +559,164 @@ float3 applyUnderwaterFog(float3 color, float distance, float3 lightColor, float
     float3 inscatter = waterInscatter(distance, lightColor, lightIntensity);
 
     return color * transmittance + inscatter;
+}
+
+// =============================================================================
+// UNDERWATER CAMERA DISTORTION
+// =============================================================================
+
+// Simple 2D noise for underwater wave distortion
+float underwaterNoise(float2 p)
+{
+    float2 i = floor(p);
+    float2 f = frac(p);
+    f = f * f * (3.0 - 2.0 * f);  // Smoothstep
+
+    float a = frac(sin(dot(i, float2(12.9898, 78.233))) * 43758.5453);
+    float b = frac(sin(dot(i + float2(1, 0), float2(12.9898, 78.233))) * 43758.5453);
+    float c = frac(sin(dot(i + float2(0, 1), float2(12.9898, 78.233))) * 43758.5453);
+    float d = frac(sin(dot(i + float2(1, 1), float2(12.9898, 78.233))) * 43758.5453);
+
+    return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
+}
+
+// Multi-octave noise for more natural wave pattern
+float underwaterFBM(float2 p, float time)
+{
+    float value = 0.0;
+    float amplitude = 0.5;
+    float frequency = 1.0;
+
+    // Animate UV coordinates
+    float2 animatedP = p;
+
+    for (int i = 0; i < 3; i++)
+    {
+        // Different animation direction per octave
+        float2 offset = float2(
+            sin(time * 0.7 + i * 1.3) * 0.5,
+            cos(time * 0.5 + i * 0.9) * 0.5
+        );
+        value += amplitude * underwaterNoise((animatedP + offset) * frequency);
+        amplitude *= 0.5;
+        frequency *= 2.0;
+    }
+
+    return value;
+}
+
+// Calculate underwater ray direction distortion
+// This simulates looking up through the water surface from below
+// rayDir: original ray direction (normalized)
+// uv: screen UV coordinates (0-1)
+// time: animation time
+// Returns: distorted ray direction
+float3 applyUnderwaterRayDistortion(float3 rayDir, float2 uv, float time)
+{
+#if !ENABLE_UNDERWATER_DISTORTION
+    return rayDir;
+#endif
+
+    // IOR-based distortion: rays bend when looking up through water surface
+    // Water-to-air refraction (eta = WATER_IOR / 1.0)
+    float eta = WATER_IOR;  // Water to air
+
+    // Calculate angle from vertical (how much we're looking up vs sideways)
+    float verticalComponent = rayDir.y;
+
+    // Only apply strong IOR distortion when looking upward (toward water surface)
+    // Looking down or sideways underwater has minimal distortion
+    float upwardFactor = saturate(verticalComponent);
+
+    // Snell's law distortion - rays bend away from normal when going to less dense medium
+    // This creates the "dome" effect when looking up from underwater
+    float sinTheta = sqrt(1.0 - verticalComponent * verticalComponent);
+    float sinThetaRefracted = sinTheta * eta;
+
+    // Check for total internal reflection (critical angle ~48.6° for water)
+    bool totalInternalReflection = sinThetaRefracted > 1.0;
+
+    float3 distortedDir = rayDir;
+
+    if (!totalInternalReflection && upwardFactor > 0.01)
+    {
+        // Calculate refracted angle
+        float cosThetaRefracted = sqrt(1.0 - sinThetaRefracted * sinThetaRefracted);
+
+        // Blend between original and refracted based on upward factor and strength setting
+        float distortionAmount = upwardFactor * UNDERWATER_DISTORTION_STRENGTH;
+
+        // Create horizontal distortion that increases toward edges (barrel distortion effect)
+        float2 centerOffset = uv - 0.5;
+        float edgeDist = length(centerOffset);
+
+        // Radial distortion - rays at edges bend more (fisheye-like effect underwater)
+        float radialDistortion = edgeDist * distortionAmount * 0.5;
+
+        // Apply radial push outward for underwater dome effect
+        float2 radialOffset = normalize(centerOffset + 0.0001) * radialDistortion;
+
+        distortedDir.xz += radialOffset * (1.0 - abs(verticalComponent));
+    }
+
+    // Animated wave distortion (always active when underwater)
+    float2 waveUV = uv * UNDERWATER_WAVE_SCALE;
+    float waveTime = time * UNDERWATER_WAVE_SPEED;
+
+    // Two overlapping wave patterns for more natural look
+    float wave1 = underwaterFBM(waveUV, waveTime);
+    float wave2 = underwaterFBM(waveUV * 1.3 + 10.0, waveTime * 0.8);
+    float combinedWave = (wave1 + wave2) * 0.5 - 0.5;  // Center around 0
+
+    // Apply wave distortion to ray direction
+    float waveStrength = UNDERWATER_WAVE_DISTORTION;
+    distortedDir.x += combinedWave * waveStrength;
+    distortedDir.z += underwaterFBM(waveUV.yx + 5.0, waveTime * 1.1) * waveStrength - waveStrength * 0.5;
+
+    return normalize(distortedDir);
+}
+
+// Calculate UV offset for underwater screen-space distortion
+// This is for post-process style distortion on the final image
+float2 getUnderwaterUVDistortion(float2 uv, float time)
+{
+#if !ENABLE_UNDERWATER_DISTORTION
+    return float2(0, 0);
+#endif
+
+    float2 waveUV = uv * UNDERWATER_WAVE_SCALE;
+    float waveTime = time * UNDERWATER_WAVE_SPEED;
+
+    // Layered wave distortion
+    float2 distortion;
+    distortion.x = underwaterFBM(waveUV, waveTime) - 0.5;
+    distortion.y = underwaterFBM(waveUV + float2(7.3, 3.7), waveTime * 0.9) - 0.5;
+
+    // Add slower, larger waves
+    float2 largeWaveUV = uv * UNDERWATER_WAVE_SCALE * 0.3;
+    distortion.x += (underwaterFBM(largeWaveUV, waveTime * 0.5) - 0.5) * 2.0;
+    distortion.y += (underwaterFBM(largeWaveUV + float2(13.1, 17.3), waveTime * 0.4) - 0.5) * 2.0;
+
+    return distortion * UNDERWATER_WAVE_DISTORTION;
+}
+
+// Get chromatic aberration offsets for underwater RGB separation
+float3 getUnderwaterChromaticOffset(float2 uv)
+{
+    // Early out if chromatic aberration is disabled (check at runtime since it's a float)
+    if (UNDERWATER_CHROMATIC_ABERRATION <= 0.0)
+        return float3(0, 0, 0);
+
+    // Distance from center affects aberration strength
+    float2 centerOffset = uv - 0.5;
+    float edgeDist = length(centerOffset);
+
+    // R shifts outward, B shifts inward (like real chromatic aberration)
+    return float3(
+        edgeDist * UNDERWATER_CHROMATIC_ABERRATION,   // Red channel offset
+        0.0,                                           // Green stays centered
+        -edgeDist * UNDERWATER_CHROMATIC_ABERRATION   // Blue channel offset
+    );
 }
 
 #endif // __OPENRTX_WATER_HLSL__

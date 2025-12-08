@@ -577,30 +577,42 @@ ShadowResult traceShadowRay(float3 origin, float3 direction, float maxDist, Open
             SurfaceInfo surfaceInfo = MaterialVanilla(hitInfo, geometryInfo, objectInstance);
 
             // Check if opaque hit (but not clouds)
-            if (hitInfo.materialType == MATERIAL_TYPE_OPAQUE ||
-                hitInfo.materialType == MATERIAL_TYPE_ALPHA_TEST)
+            if (hitInfo.materialType == MATERIAL_TYPE_OPAQUE)
             {
                 // Opaque surface blocks light completely
                 result.visibility = 0.0;
                 result.transmission = 0.0;
                 return result;
             }
+            else if (hitInfo.materialType == MATERIAL_TYPE_ALPHA_TEST)
+            {
+                // Alpha test materials (leaves, fences, etc.) should block most light
+                // but allow minimal transmission to prevent complete darkness
+                result.visibility *= 0.1; // Allow 10% light through alpha test
+                result.transmission *= 0.05; // Minimal color transmission
+                return result;
+            }
 
-            // Translucent surface - accumulate color transmission
+            // Translucent surface - accumulate color transmission (only for alpha blend materials)
+            if (hitInfo.materialType == MATERIAL_TYPE_ALPHA_BLEND)
+            {
 #if ENABLE_COLORED_SHADOWS
-            // Apply Beer's law for color absorption
-            float3 surfaceColor = surfaceInfo.color;
-            float alpha = surfaceInfo.alpha;
+                // Apply Beer's law for color absorption
+                float3 surfaceColor = surfaceInfo.color;
+                float alpha = surfaceInfo.alpha;
 
-            // Color transmission through translucent material
-            float3 transmittedColor = lerp(1.0, surfaceColor, alpha * COLOR_TRANSMISSION_STRENGTH);
-            colorAccum *= transmittedColor;
+                // Enhanced color transmission through translucent material
+                // Use stronger color mixing for better colored light transmission
+                float transmissionFactor = alpha * COLOR_TRANSMISSION_STRENGTH;
+                float3 transmittedColor = lerp(1.0, surfaceColor, transmissionFactor * 1.5); // Boosted transmission
+                colorAccum *= transmittedColor;
 
-            // Reduce visibility based on alpha
-            result.visibility *= (1.0 - alpha * 0.5);
+                // Reduce visibility based on alpha, but allow more colored light through
+                result.visibility *= (1.0 - alpha * 0.3); // Reduced visibility penalty for colored glass
 #else
-            result.visibility *= (1.0 - surfaceInfo.alpha);
+                result.visibility *= (1.0 - surfaceInfo.alpha);
 #endif
+            }
 
             // Continue ray past this surface
             shadowRay.Origin = shadowRay.Origin + shadowRay.Direction * (hitInfo.rayT + 0.001);
@@ -983,6 +995,10 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
     // Check if this is an opaque hit (for reflections later)
     bool isOpaque = (hitInfo.materialType == MATERIAL_TYPE_OPAQUE ||
                      hitInfo.materialType == MATERIAL_TYPE_ALPHA_TEST);
+
+    // Check for cloud geometry
+    bool isCloud = (objectInstance.flags & kObjectInstanceFlagClouds) != 0;
+
     if (isOpaque && !rayState.hitOpaque)
     {
         rayState.hitOpaque = true;
@@ -1043,13 +1059,14 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
     surface.isWater = isWater;
     surface.waterDepth = 0.0;
 
-    // Apply default roughness fix
-#if FIX_DEFAULT_MATERIAL
-    if (geometryInfo.pbrTextureDataIndex == kInvalidPBRTextureHandle)
+    // Clouds should be fully diffuse (no specular reflections)
+    // They're volumetric scattering surfaces, not smooth reflective materials
+    // This MUST come after the MIN_ROUGHNESS clamp to override it
+    if (isCloud)
     {
-        surface.roughness = DEFAULT_ROUGHNESS;
+        surface.roughness = 1.0;  // Fully rough - no specular (overrides MIN_ROUGHNESS)
+        surface.metalness = 0.0;  // Non-metallic
     }
-#endif
 
     // Get direct and ambient lighting separately
     float3 directLight = shadeSurfaceDirectPBR(surface, ctx);
@@ -1067,8 +1084,9 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
         lerp(0.45, 1, mad(dot(surfaceInfo.normal, float3(0, 1, 0)), 0.5, 0.5)),
         abs(dot(surfaceInfo.normal, float3(0, 1, 0))));
 
-    // Apply shadow
-    light *= lerp(0.3, 1.0, shadow.visibility);
+    // Apply shadow with proper linear falloff to prevent crushing
+    // Use direct multiplication instead of lerp for accurate shadow values
+    light *= shadow.visibility;
 
     // Apply color transmission from stained glass etc.
     light *= shadow.transmission;
@@ -1083,9 +1101,9 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
     float3 reflectionContrib = 0.0;
 
 #if OPENRTX_ENABLED && ENABLE_RAYTRACED_REFLECTIONS
-    // Add reflections for smooth/metallic surfaces
-    float reflectivity = surfaceInfo.metalness + (1.0 - surface.roughness) * 0.3;
-    if (reflectivity > 0.1 && isOpaque)
+    // Add reflections for smooth/metallic surfaces (not clouds - they're diffuse scattering)
+    float reflectivity = surface.metalness + (1.0 - surface.roughness) * 0.3;
+    if (reflectivity > 0.1 && isOpaque && !isCloud)
     {
         reflectionContrib = traceReflection(
             surfaceInfo.position,
@@ -1193,7 +1211,9 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
             // Calculate Fresnel reflectance using glass IOR
             // Apply strength parameter and cap to prevent excessive washout at grazing angles
             float fresnelRaw = glassFresnelReflectance(NdotV, GLASS_IOR);
-            float fresnelBase = 0.04;  // Base reflectance at normal incidence (IOR ~1.5)
+            // Calculate proper F0 from glass IOR instead of hardcoded value
+            float3 glassF0 = f0FromIOR(GLASS_IOR);
+            float fresnelBase = glassF0.r;  // Base reflectance at normal incidence from IOR
             // Interpolate between base and full Fresnel based on strength parameter
             float fresnel = lerp(fresnelBase, fresnelRaw, GLASS_FRESNEL_STRENGTH);
             // Cap maximum reflectance to preserve color transmission
@@ -1227,9 +1247,10 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
             }
 
             // Combine: Fresnel reflection + transmitted/refracted light
-            // Beer-Lambert absorption already applied in trace - no additional tinting needed
+            // Apply additional glass color tinting for stronger colored transmission
             float transmissionFactor = 1.0 - fresnel;
-            float3 transmittedLight = refractedColor * transmissionFactor;
+            float3 glassTint = lerp(1.0, surfaceInfo.color, surfaceInfo.alpha * 0.8); // Stronger color tint
+            float3 transmittedLight = refractedColor * transmissionFactor * glassTint;
 
             // Trace actual reflection for glass specular (not just sky)
             // This prevents washed-out appearance in enclosed spaces
@@ -1242,6 +1263,119 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
 
             // Throughput for any additional layers
             throughput = 0.0;  // We've fully handled this with refraction trace
+        }
+        else
+#endif
+        // Water surface refraction (looking down into water from above)
+#if ENABLE_WATER_REFRACTION
+        if (isWater && !g_view.cameraIsUnderWater)
+        {
+            float3 viewDir = -rayState.rayDesc.Direction;
+
+            // Get enhanced water surface properties with waves
+            WaterSurface water = evaluateWaterSurface(
+                surfaceInfo.position,
+                viewDir,
+                ctx.time,
+                ctx.rainIntensity
+            );
+
+            // Use wave-displaced normal for refraction
+            float3 N = water.normal;
+            float NdotV = saturate(dot(N, viewDir));
+
+            // Get Fresnel reflectance
+            float fresnel = water.fresnel;
+
+            // Calculate refracted ray direction (air to water)
+            float3 refractDir = water.refractDir;
+
+            // Apply wave-based distortion strength
+            float distortionStrength = WATER_REFRACTION_STRENGTH;
+
+            // Trace refracted ray to see what's underwater
+            float3 refractedColor = 0.0;
+            float underwaterDepth = 0.0;
+
+            // Create refracted ray
+            RayDesc refractRay;
+            refractRay.Origin = surfaceInfo.position + refractDir * 0.01;  // Small offset to avoid self-intersection
+            refractRay.Direction = refractDir;
+            refractRay.TMin = 0.0;
+            refractRay.TMax = WATER_REFRACTION_DEPTH_FADE * 2.0;  // Limit underwater trace distance
+
+            // Trace the refracted ray
+            RayQuery<RAY_FLAG_NONE> refractQuery;
+            refractQuery.TraceRayInline(SceneBVH, RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0xff, refractRay);
+
+            while (refractQuery.Proceed())
+            {
+                HitInfo refractHit = GetCandidateHitInfo(refractQuery);
+                // Skip water surfaces in refraction trace
+                if (refractHit.materialType != MATERIAL_TYPE_WATER && AlphaTestHitLogic(refractHit))
+                {
+                    refractQuery.CommitNonOpaqueTriangleHit();
+                }
+            }
+
+            if (refractQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+            {
+                HitInfo underwaterHit = GetCommittedHitInfo(refractQuery);
+                underwaterDepth = underwaterHit.rayT;
+
+                // Get surface info for underwater object
+                ObjectInstance underwaterObj = objectInstances[underwaterHit.objectInstanceIndex];
+                GeometryInfo underwaterGeom = GetGeometryInfo(underwaterHit, underwaterObj);
+                SurfaceInfo underwaterSurf = MaterialVanilla(underwaterHit, underwaterGeom, underwaterObj);
+
+                if (!underwaterSurf.shouldDiscard)
+                {
+                    // Simple lighting for underwater surface
+                    float3 underwaterNormal = underwaterSurf.normal;
+                    float underwaterNdotL = saturate(dot(underwaterNormal, ctx.sunDir));
+
+                    // Underwater receives attenuated sunlight
+                    float3 underwaterLight = ctx.sunColor * ctx.sunIntensity * underwaterNdotL * 0.5;
+                    underwaterLight += ctx.constantAmbient * 0.3;  // Ambient
+
+                    // Add caustics effect on underwater surfaces
+                    float3 caustics = waterCaustics(underwaterSurf.position, ctx.time, ctx.sunDir);
+                    underwaterLight += caustics * ctx.sunIntensity * 0.5;
+
+                    refractedColor = underwaterSurf.color * underwaterLight;
+
+                    // Apply water absorption based on depth traveled
+                    float3 waterAbsorption = waterTransmittance(underwaterDepth);
+                    refractedColor *= waterAbsorption;
+
+                    // Add underwater inscatter (blue tint from water)
+                    float3 inscatter = waterInscatter(underwaterDepth, ctx.sunColor, ctx.sunIntensity * 0.3);
+                    refractedColor += inscatter;
+                }
+            }
+            else
+            {
+                // No underwater hit - show deep water color
+                underwaterDepth = WATER_REFRACTION_DEPTH_FADE;
+                refractedColor = waterInscatter(underwaterDepth, ctx.sunColor, ctx.sunIntensity * 0.5);
+            }
+
+            // Fade refraction effect with depth (distant underwater objects less distorted)
+            float depthFade = saturate(underwaterDepth / WATER_REFRACTION_DEPTH_FADE);
+
+            // Trace reflection on water surface
+            float3 reflectDir = reflect(rayState.rayDesc.Direction, N);
+            float3 reflectedColor = renderSkyWithClouds(reflectDir, ctx);
+
+            // Also trace actual scene reflection for nearby objects
+            float3 sceneReflection = traceSingleReflection(surfaceInfo.position, reflectDir, N, ctx);
+            reflectedColor = lerp(sceneReflection, reflectedColor, 0.3);  // Blend scene and sky reflection
+
+            // Combine reflection and refraction using Fresnel
+            emission = lerp(refractedColor, reflectedColor, fresnel);
+
+            // Water is fully handled
+            throughput = 0.0;
         }
         else
 #endif
@@ -1356,6 +1490,18 @@ void PrimaryCheckerboardRayGenInline(
     rayDesc.Origin = g_view.viewOriginSteveSpace;
     rayDesc.TMin = 0;
     rayDesc.TMax = 10000;
+
+    // Apply underwater camera distortion when submerged
+    float2 screenUV = (float2(dispatchThreadID.xy) + 0.5) * g_view.recipRenderResolution;
+    bool isUnderwater = g_view.cameraIsUnderWater != 0;
+
+#if ENABLE_UNDERWATER_DISTORTION
+    if (isUnderwater)
+    {
+        // Apply IOR-based ray distortion for underwater view
+        rayDesc.Direction = applyUnderwaterRayDistortion(rayDesc.Direction, screenUV, g_view.time);
+    }
+#endif
 
     // Initialize OpenRTX context with game-provided values
     float3 sunDir = getTrueDirectionToSun();

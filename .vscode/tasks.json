@@ -1,0 +1,45 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Template Sync",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "src/script.py"
+            ]
+        },
+        {
+            "label": "Lazurite Build",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "-m",
+                "lazurite",
+                "build",
+                "./project",
+                "-o",
+                "M:\\Games\\Minecraft Preview for Windows\\Content\\shaders\\OpenRTX"
+            ],
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "Sync and Build",
+            "dependsOn": [
+                "Template Sync",
+                "Lazurite Build"
+            ],
+            "dependsOrder": "sequence",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            }
+        }
+    ]
+}

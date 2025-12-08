@@ -612,6 +612,44 @@
 #define WATER_ROUGHNESS_OVERRIDE 0.02  // Smooth water surface
 #endif
 
+// Underwater camera distortion (IOR-based refraction when camera is submerged)
+#ifndef ENABLE_UNDERWATER_DISTORTION
+#define ENABLE_UNDERWATER_DISTORTION 1
+#endif
+
+#ifndef UNDERWATER_DISTORTION_STRENGTH
+#define UNDERWATER_DISTORTION_STRENGTH 0.15  // How much the image warps (0 = none, 1 = full IOR)
+#endif
+
+#ifndef UNDERWATER_WAVE_DISTORTION
+#define UNDERWATER_WAVE_DISTORTION 0.02  // Animated wave distortion intensity
+#endif
+
+#ifndef UNDERWATER_WAVE_SPEED
+#define UNDERWATER_WAVE_SPEED 2.0  // Speed of underwater wave animation
+#endif
+
+#ifndef UNDERWATER_WAVE_SCALE
+#define UNDERWATER_WAVE_SCALE 3.0  // Scale of underwater wave pattern
+#endif
+
+#ifndef UNDERWATER_CHROMATIC_ABERRATION
+#define UNDERWATER_CHROMATIC_ABERRATION 0.003  // RGB channel separation underwater
+#endif
+
+// Water surface refraction (looking down into water from above)
+#ifndef ENABLE_WATER_REFRACTION
+#define ENABLE_WATER_REFRACTION 1
+#endif
+
+#ifndef WATER_REFRACTION_STRENGTH
+#define WATER_REFRACTION_STRENGTH 1.0  // Multiplier for IOR-based refraction (0 = none, 1 = physically accurate)
+#endif
+
+#ifndef WATER_REFRACTION_DEPTH_FADE
+#define WATER_REFRACTION_DEPTH_FADE 16.0  // Distance at which refraction effect fades (blocks)
+#endif
+
 // Foam settings
 #ifndef ENABLE_WATER_FOAM
 #define ENABLE_WATER_FOAM 1
@@ -864,7 +902,7 @@
 #endif
 
 #ifndef COLOR_TRANSMISSION_STRENGTH
-#define COLOR_TRANSMISSION_STRENGTH 1.0  // Strength of colored light transmission
+#define COLOR_TRANSMISSION_STRENGTH 1.5  // Strength of colored light transmission
 #endif
 
 // =============================================================================

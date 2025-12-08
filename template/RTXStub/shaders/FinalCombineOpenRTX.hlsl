@@ -123,9 +123,54 @@ void FinalCombine(
 #endif
 
     // ---------------------------
-    // Chromatic Aberration
+    // Underwater Post-Processing
+    // ---------------------------
+    bool isUnderwater = g_view.cameraIsUnderWater != 0;
+#if ENABLE_UNDERWATER_DISTORTION
+    if (isUnderwater)
+    {
+        // Apply underwater chromatic aberration (wavelength-dependent IOR)
+        float3 chromaOffset = getUnderwaterChromaticOffset(uv);
+        if (any(chromaOffset != 0))
+        {
+            float2 center = uv - 0.5;
+            float2 dir = normalize(center + 0.0001);
+
+            // Sample at offset positions for R and B channels
+            // Note: This is approximate since we don't have a separate texture sample
+            // The actual offset is applied through the ray distortion in primary pass
+            // This adds additional color fringing for enhanced effect
+            float2 uvR = uv + dir * chromaOffset.r;
+            float2 uvB = uv + dir * chromaOffset.b;
+
+            // Clamp UVs to valid range
+            uvR = saturate(uvR);
+            uvB = saturate(uvB);
+
+            // Read offset pixels (approximate - uses neighbor pixels)
+            int2 pixelR = int2(uvR * float2(g_view.renderResolution));
+            int2 pixelB = int2(uvB * float2(g_view.renderResolution));
+            pixelR = clamp(pixelR, int2(0, 0), int2(g_view.renderResolution) - 1);
+            pixelB = clamp(pixelB, int2(0, 0), int2(g_view.renderResolution) - 1);
+
+            // Blend in chromatic offset
+            float3 colorR = outputBufferFinal[pixelR].rgb;
+            float3 colorB = outputBufferFinal[pixelB].rgb;
+            color.r = lerp(color.r, colorR.r, 0.5);
+            color.b = lerp(color.b, colorB.b, 0.5);
+        }
+
+        // Apply subtle color tint for underwater atmosphere
+        float3 underwaterTint = float3(0.7, 0.85, 1.0);  // Slight blue-green tint
+        color *= underwaterTint;
+    }
+#endif
+
+    // ---------------------------
+    // Chromatic Aberration (general)
     // ---------------------------
 #if ENABLE_CHROMATIC_ABERRATION
+    if (!isUnderwater)  // Skip if underwater CA was already applied
     {
         float2 center = uv - 0.5;
         float dist = length(center);
@@ -149,8 +194,8 @@ void FinalCombine(
         float2 sunScreenPos = sunClipPos.xy / sunClipPos.w * 0.5 + 0.5;
         sunScreenPos.y = 1.0 - sunScreenPos.y;
 
-        // Only add lens flare when sun is visible
-        if (sunClipPos.w > 0.0 && all(saturate(sunScreenPos) == sunScreenPos))
+        // Only add lens flare when sun is visible and not underwater
+        if (sunClipPos.w > 0.0 && all(saturate(sunScreenPos) == sunScreenPos) && !isUnderwater)
         {
             float3 sunColor = blackbodyColor(SUN_COLOR_TEMPERATURE);
             float3 lensFlare = computeLensFlare(uv, sunScreenPos, sunColor, LENS_FLARE_INTENSITY);

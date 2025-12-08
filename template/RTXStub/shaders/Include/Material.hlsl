@@ -539,7 +539,18 @@ SurfaceInfo MaterialVanilla(HitInfo hitInfo, GeometryInfo geometryInfo, ObjectIn
         surfaceInfo.metalness = mers.r;
         // Apply gamma 2 correction to emissive (texture value 0.5 -> 0.25 intensity)
         surfaceInfo.emissive = mers.g * mers.g;
+        
+        // Apply default material fix for roughness
+#if FIX_DEFAULT_MATERIAL
+        // Adding this special evaluation to roughness results in making the default material for non-textured blocks 100% rough instead of 0% rough,
+        // but also leads to the issue where PBR textures with MERs defined as [0,0,0] will be made rough instead of their intended value. Worthy tradeoff
+        // for now since no one in the PBR texturing community does this with their texture sets
+        float4 colour = colorTex.SampleLevel(pointSampler, uv, 0);
+        surfaceInfo.roughness = (mers.r + mers.g + mers.b) == 0 && colour.a == 1.0 ? 1.0 : mers.b;
+#else
         surfaceInfo.roughness = mers.b;
+#endif
+        
         surfaceInfo.subsurface = mers.a;
 
         if (pbr.flags & (kPBRTextureDataFlagHasNormalTexture | kPBRTextureDataFlagHasHeightMapTexture))

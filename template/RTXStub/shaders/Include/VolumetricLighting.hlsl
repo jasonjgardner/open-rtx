@@ -55,14 +55,16 @@ float calcDensityModifier(float3 worldPos, float3 sunDir, bool isUnderwater)
 
     if (!isUnderwater)
     {
-        // Height-based falloff (exponential)
-        float heightFactor = exp(-FOG_HEIGHT_FALLOFF * max(0.0, worldPos.y - 64.0));
+        // Reduced height-based falloff for better light transmission
+        // Use gentler exponential curve that doesn't cut off light abruptly
+        float heightAboveGround = max(0.0, worldPos.y - 64.0);
+        float heightFactor = exp(-FOG_HEIGHT_FALLOFF * 0.3 * heightAboveGround); // Reduced falloff
         densityModifier *= heightFactor;
 
         // Noon fog reduction (less fog at midday)
         // When NOON_FOG_REDUCTION = 1.0, this has no effect
         float dayFactor = saturate(sunDir.y * 2.0 + 0.5);
-        float noonFactor = lerp(1.0, NOON_FOG_REDUCTION, dayFactor * dayFactor);
+        float noonFactor = lerp(1.0, NOON_FOG_REDUCTION, dayFactor * dayFactor * 0.5); // Gentler reduction
         densityModifier *= noonFactor;
     }
 
@@ -165,19 +167,36 @@ VolumetricOutput marchVolumetricFog(
     return output;
 #endif
 
-    float stepSize = min(maxDistance, FOG_MAX_DISTANCE) / float(numSteps);
+    // Early out if beyond max fog distance
+    float effectiveMaxDistance = min(maxDistance, FOG_MAX_DISTANCE);
+    if (effectiveMaxDistance <= 0.01)
+        return output;
+
+    // Adaptive step sizing: fewer steps for short distances
+    int adaptiveSteps = numSteps;
+    if (effectiveMaxDistance < 32.0)
+    {
+        adaptiveSteps = max(4, numSteps / 4);
+    }
+    else if (effectiveMaxDistance < 64.0)
+    {
+        adaptiveSteps = max(8, numSteps / 2);
+    }
+
+    float stepSize = effectiveMaxDistance / float(adaptiveSteps);
     float3 currentPos = rayOrigin;
 
     // Phase function for sun
     float cosTheta = dot(rayDir, sunDir);
     float phase = dualLobePhase(cosTheta, 0.8, -0.3, 0.7);
 
-    // Scattering coefficient
-    float3 scattering = float3(0.005, 0.006, 0.008); // Slightly blue-shifted
+    // Use configured scattering coefficients instead of hardcoded values
+    float3 scattering = FOG_SCATTERING_COEFFICIENTS;
 
-    for (int i = 0; i < numSteps; i++)
+    for (int i = 0; i < adaptiveSteps; i++)
     {
-        float density = getFogDensity(currentPos, rainIntensity, time);
+        // Use full fog density function with proper sun direction
+        float density = getFogDensity(currentPos, rainIntensity, time, sunDir, false);
 
         if (density > 0.0001)
         {
@@ -189,24 +208,42 @@ VolumetricOutput marchVolumetricFog(
             float3 lightContribution = 0.0;
 
 #if ENABLE_SUN_FOG
-            // Sun contribution
-            float sunVisibility = 1.0; // Would need shadow sampling for accurate results
-            lightContribution += sunColor * phase * sunVisibility * SUN_FOG_AMOUNT;
+            // Sun contribution with simple shadow approximation
+            // Use height-based shadow for terrain blocking
+            float terrainHeight = 64.0; // Approximate terrain height
+            float shadowFactor = 1.0;
+            
+            // Simple terrain shadow: if sun is low and ray goes toward ground, reduce visibility
+            if (sunDir.y < 0.3 && currentPos.y > terrainHeight && rayDir.y < -0.1)
+            {
+                float shadowDistance = (currentPos.y - terrainHeight) / max(-rayDir.y, 0.01);
+                shadowFactor = saturate(exp(-shadowDistance * 0.01));
+            }
+            
+            lightContribution += sunColor * phase * shadowFactor * SUN_FOG_AMOUNT;
 #endif
 
 #if ENABLE_STATIC_GI_FOG
-            // Ambient/GI contribution
-            float3 ambientColor = float3(0.1, 0.12, 0.15); // Sky ambient
+            // Enhanced ambient/GI contribution with wavelength dependency
+            float3 ambientColor = float3(0.15, 0.18, 0.22); // Brighter sky ambient
             lightContribution += ambientColor * STATIC_GI_FOG_AMOUNT;
 #endif
 
-            // Accumulate
+            // Improved light accumulation with proper energy conservation
             float3 stepInscatter = lightContribution * scattering * density * stepSize;
+            
+            // Accumulate inscatter with proper transmittance weighting
             output.inscatter += stepInscatter * output.transmittance;
             output.transmittance *= stepTransmittance;
-        }
 
-        currentPos += rayDir * stepSize;
+            // Advance ray only when we have meaningful calculations
+            currentPos += rayDir * stepSize;
+        }
+        else
+        {
+            // Still advance ray even with negligible density
+            currentPos += rayDir * stepSize;
+        }
 
         // Early termination
         if (output.transmittance < 0.01)
@@ -470,10 +507,21 @@ VolumetricResult evaluateVolumetrics(
     return result;
 }
 
-// Apply volumetrics to final color
+// Apply volumetrics to final color with improved light transmission
 float3 applyVolumetrics(float3 sceneColor, VolumetricResult volumetrics)
 {
-    return sceneColor * volumetrics.transmittance + volumetrics.inscatter;
+    // Ensure transmittance doesn't go too dark (maintain minimum visibility)
+    float minTransmittance = 0.1;
+    float effectiveTransmittance = max(volumetrics.transmittance, minTransmittance);
+    
+    // Apply scene color through fog with proper energy conservation
+    float3 transmittedScene = sceneColor * effectiveTransmittance;
+    
+    // Add inscatter light with wavelength-dependent scattering
+    float3 finalColor = transmittedScene + volumetrics.inscatter;
+    
+    // Prevent oversaturation while maintaining light transmission
+    return min(finalColor, sceneColor * 1.5 + volumetrics.inscatter * 1.2);
 }
 
 #endif // __OPENRTX_VOLUMETRIC_LIGHTING_HLSL__

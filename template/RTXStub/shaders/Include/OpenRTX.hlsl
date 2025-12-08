@@ -249,6 +249,30 @@ float3 shadeSurfaceDirectPBR(EnhancedSurface surface, OpenRTXContext ctx)
     float3 N = surface.normal;
     float3 V = surface.viewDir;
 
+    // Clouds are fully diffuse - skip all specular calculations
+    if (surface.roughness >= 0.99)
+    {
+        // Pure diffuse lighting for clouds
+        float3 L = ctx.sunDir;
+        float NdotL = saturate(dot(N, L));
+        
+        if (NdotL > 0.0)
+        {
+            float dayFactor = getDayFactor(ctx.sunDir);
+            float timeScale = getTimeOfDayScale(ctx.sunDir, ctx.sunColor);
+            
+            if (dayFactor > 0.01)
+            {
+                // Lambertian diffuse only
+                float3 diffuse = surface.albedo * kInvPi * NdotL;
+                float3 sunLight = ctx.sunColor * timeScale * 3.0;
+                result += diffuse * sunLight * surface.ao;
+            }
+        }
+        
+        return result;
+    }
+
     // Compute F0
     float3 f0 = computeF0(surface.albedo, surface.metalness, 1.5);
 
@@ -327,9 +351,24 @@ float3 shadeSurfaceAmbientPBR(EnhancedSurface surface, OpenRTXContext ctx)
 {
     float3 result = 0.0;
 
+    // Clouds are fully diffuse - simplified ambient lighting
+    if (surface.roughness >= 0.99)
+    {
+        // Simple Lambertian ambient for clouds
+        float3 ambient = ctx.constantAmbient;
+        ambient = max(ambient, 0.08);  // Increased to match main ambient minimum
+        
+        float dayFactor = getDayFactor(ctx.sunDir);
+        float timeScale = getTimeOfDayScale(ctx.sunDir, ctx.sunColor);
+        
+        // Basic ambient with time-of-day scaling
+        result = surface.albedo * ambient * timeScale * surface.ao;
+        return result;
+    }
+
     // Game-provided ambient - ensure reasonable minimum for indoor/shadow areas
     float3 ambient = ctx.constantAmbient;
-    ambient = max(ambient, 0.05);  // Increased minimum to prevent crushed shadows
+    ambient = max(ambient, 0.08);  // Further increased minimum to prevent crushed shadows
 
     // Time-of-day factor for indirect lighting
     float dayFactor = getDayFactor(ctx.sunDir);
@@ -350,12 +389,12 @@ float3 shadeSurfaceAmbientPBR(EnhancedSurface surface, OpenRTXContext ctx)
 
     // Ground bounce contribution
     float3 groundColor = float3(0.12, 0.10, 0.08);  // Warmer ground albedo
-    float3 groundIrradiance = groundColor * ctx.sunColor * dayFactor * 0.4;
+    float3 groundIrradiance = groundColor * ctx.sunColor * dayFactor * 0.6;  // Increased from 0.4
 
     // Horizontal fill light (for vertical faces like walls)
     // Approximates light bouncing from surrounding environment
     float3 horizonColor = lerp(ctx.gameSkyColorDown, ctx.gameSkyColor, 0.5);
-    float3 horizontalIrradiance = horizonColor * 0.3;
+    float3 horizontalIrradiance = horizonColor * 0.4;  // Increased from 0.3
 
     // Combine all indirect sources
     float3 indirectIrradiance = skyIrradiance * 0.2 * skyWeight
@@ -363,7 +402,7 @@ float3 shadeSurfaceAmbientPBR(EnhancedSurface surface, OpenRTXContext ctx)
                               + horizontalIrradiance * horizontalWeight;
 
     // Ensure minimum indirect for all surfaces (prevents crushed shadows)
-    indirectIrradiance = max(indirectIrradiance, 0.02);
+    indirectIrradiance = max(indirectIrradiance, 0.04);  // Increased from 0.02
 
     // Scale with time of day (but maintain minimum at night)
     indirectIrradiance *= dayFactor * 0.6 + 0.4;
