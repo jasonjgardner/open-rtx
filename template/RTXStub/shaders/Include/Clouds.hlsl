@@ -319,7 +319,11 @@ float sampleCloudDensity(float3 worldPos, float time, float lod)
     float heightFraction = (worldPos.y - kCloudLayerBottom) / kCloudLayerThickness;
 
     // Apply wind advection (animate clouds)
-    float2 windOffset = normalize(CLOUD_WIND_DIRECTION) * CLOUD_WIND_SPEED * time;
+    // Scale time appropriately - game time can be large, so use modulo for stability
+    // The 0.05 factor converts to reasonable visual speed
+    float windTime = fmod(time, 10000.0) * 0.05;
+    float2 windDir = normalize(CLOUD_WIND_DIRECTION);
+    float2 windOffset = windDir * CLOUD_WIND_SPEED * windTime;
     float3 animatedPos = worldPos;
     animatedPos.xz += windOffset;
 
@@ -360,7 +364,7 @@ float sampleCloudDensity(float3 worldPos, float time, float lod)
     float3 detailCoord = animatedPos * CLOUD_DETAIL_NOISE_FREQ;
 
     // Animate detail noise slightly differently for variation
-    detailCoord.xz += windOffset * 0.2;
+    detailCoord.xz += windDir * CLOUD_WIND_SPEED * windTime * 0.2;
 
     // Detail noise - erodes cloud edges
     int detailOctaves = max(1, 3 - int(lod * 0.5));
@@ -385,7 +389,9 @@ float sampleCloudDensityCheap(float3 worldPos, float time)
 
     float heightFraction = (worldPos.y - kCloudLayerBottom) / kCloudLayerThickness;
 
-    float2 windOffset = normalize(CLOUD_WIND_DIRECTION) * CLOUD_WIND_SPEED * time;
+    // Use same wind time scaling as main density function
+    float windTime = fmod(time, 10000.0) * 0.05;
+    float2 windOffset = normalize(CLOUD_WIND_DIRECTION) * CLOUD_WIND_SPEED * windTime;
     float3 animatedPos = worldPos;
     animatedPos.xz += windOffset;
 
