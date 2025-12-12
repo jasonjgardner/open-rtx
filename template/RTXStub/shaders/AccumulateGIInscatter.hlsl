@@ -90,6 +90,43 @@ float3 reprojectGI(float3 currentFroxel)
     return currentFroxel;
 }
 
+// Manual trilinear sample from 3D texture using Load operations
+// This avoids dependency on a linear sampler
+float4 sampleGITrilinear(float3 froxelCoord, Texture3D<float4> tex)
+{
+    // Clamp to valid range
+    float3 clampedCoord = clamp(froxelCoord, float3(0.5, 0.5, 0.5), float3(kGIFroxelDimensions) - 0.5);
+
+    // Get integer and fractional parts
+    float3 floorCoord = floor(clampedCoord - 0.5);
+    float3 frac3 = clampedCoord - 0.5 - floorCoord;
+
+    // Clamp integer coordinates to valid range
+    int3 coord0 = clamp(int3(floorCoord), int3(0, 0, 0), int3(kGIFroxelDimensions) - 1);
+    int3 coord1 = clamp(coord0 + int3(1, 1, 1), int3(0, 0, 0), int3(kGIFroxelDimensions) - 1);
+
+    // Sample 8 corners of the trilinear cell
+    float4 c000 = tex.Load(int4(coord0.x, coord0.y, coord0.z, 0));
+    float4 c100 = tex.Load(int4(coord1.x, coord0.y, coord0.z, 0));
+    float4 c010 = tex.Load(int4(coord0.x, coord1.y, coord0.z, 0));
+    float4 c110 = tex.Load(int4(coord1.x, coord1.y, coord0.z, 0));
+    float4 c001 = tex.Load(int4(coord0.x, coord0.y, coord1.z, 0));
+    float4 c101 = tex.Load(int4(coord1.x, coord0.y, coord1.z, 0));
+    float4 c011 = tex.Load(int4(coord0.x, coord1.y, coord1.z, 0));
+    float4 c111 = tex.Load(int4(coord1.x, coord1.y, coord1.z, 0));
+
+    // Trilinear interpolation
+    float4 c00 = lerp(c000, c100, frac3.x);
+    float4 c10 = lerp(c010, c110, frac3.x);
+    float4 c01 = lerp(c001, c101, frac3.x);
+    float4 c11 = lerp(c011, c111, frac3.x);
+
+    float4 c0 = lerp(c00, c10, frac3.y);
+    float4 c1 = lerp(c01, c11, frac3.y);
+
+    return lerp(c0, c1, frac3.z);
+}
+
 // Luminance-based clamping for GI (softer than direct light)
 float4 softClamp(float4 value, float4 minVal, float4 maxVal, float softness)
 {
@@ -169,9 +206,8 @@ void AccumulateGIInscatter(
 
     if (historyValid)
     {
-        // Sample previous frame with trilinear filtering
-        float3 normalizedCoord = prevFroxelCoord / float3(kGIFroxelDimensions);
-        historyGI = volumetricGIInscatterPrevious.SampleLevel(linearClampSampler, normalizedCoord, 0);
+        // Sample previous frame with trilinear filtering (using manual trilinear)
+        historyGI = sampleGITrilinear(prevFroxelCoord, volumetricGIInscatterPrevious);
 
         // Soft clamp history (GI should be smooth, harsh clamping causes flicker)
         historyGI = softClamp(historyGI, neighborMin, neighborMax, 0.5);

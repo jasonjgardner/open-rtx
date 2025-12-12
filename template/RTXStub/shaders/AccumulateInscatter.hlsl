@@ -109,15 +109,41 @@ float3 reprojectToPreviousFroxel(float3 viewPos, float4x4 currentViewProj, float
     return prevFroxel;
 }
 
-// Trilinear sample from 3D texture with bounds checking
-float4 sampleInscatterTrilinear(float3 froxelCoord, Texture3D<float4> tex, SamplerState samp)
+// Manual trilinear sample from 3D texture using Load operations
+// This avoids dependency on a linear sampler
+float4 sampleInscatterTrilinear(float3 froxelCoord, Texture3D<float4> tex)
 {
-    float3 normalizedCoord = froxelCoord / float3(kFroxelDimensions);
-
     // Clamp to valid range
-    normalizedCoord = saturate(normalizedCoord);
+    float3 clampedCoord = clamp(froxelCoord, float3(0.5, 0.5, 0.5), float3(kFroxelDimensions) - 0.5);
 
-    return tex.SampleLevel(samp, normalizedCoord, 0);
+    // Get integer and fractional parts
+    float3 floorCoord = floor(clampedCoord - 0.5);
+    float3 frac3 = clampedCoord - 0.5 - floorCoord;
+
+    // Clamp integer coordinates to valid range
+    int3 coord0 = clamp(int3(floorCoord), int3(0, 0, 0), int3(kFroxelDimensions) - 1);
+    int3 coord1 = clamp(coord0 + int3(1, 1, 1), int3(0, 0, 0), int3(kFroxelDimensions) - 1);
+
+    // Sample 8 corners of the trilinear cell
+    float4 c000 = tex.Load(int4(coord0.x, coord0.y, coord0.z, 0));
+    float4 c100 = tex.Load(int4(coord1.x, coord0.y, coord0.z, 0));
+    float4 c010 = tex.Load(int4(coord0.x, coord1.y, coord0.z, 0));
+    float4 c110 = tex.Load(int4(coord1.x, coord1.y, coord0.z, 0));
+    float4 c001 = tex.Load(int4(coord0.x, coord0.y, coord1.z, 0));
+    float4 c101 = tex.Load(int4(coord1.x, coord0.y, coord1.z, 0));
+    float4 c011 = tex.Load(int4(coord0.x, coord1.y, coord1.z, 0));
+    float4 c111 = tex.Load(int4(coord1.x, coord1.y, coord1.z, 0));
+
+    // Trilinear interpolation
+    float4 c00 = lerp(c000, c100, frac3.x);
+    float4 c10 = lerp(c010, c110, frac3.x);
+    float4 c01 = lerp(c001, c101, frac3.x);
+    float4 c11 = lerp(c011, c111, frac3.x);
+
+    float4 c0 = lerp(c00, c10, frac3.y);
+    float4 c1 = lerp(c01, c11, frac3.y);
+
+    return lerp(c0, c1, frac3.z);
 }
 
 // Color clamping for anti-ghosting (neighborhood clamp)
@@ -207,9 +233,8 @@ void AccumulateInscatter(
 
     if (historyValid)
     {
-        // Sample previous frame with trilinear filtering
-        float3 normalizedCoord = prevFroxelCoord / float3(kFroxelDimensions);
-        historyInscatter = volumetricInscatterPrevious.SampleLevel(linearClampSampler, normalizedCoord, 0);
+        // Sample previous frame with trilinear filtering (using manual trilinear)
+        historyInscatter = sampleInscatterTrilinear(prevFroxelCoord, volumetricInscatterPrevious);
 
         // Clamp history to neighborhood (anti-ghosting)
         historyInscatter = clampToNeighborhood(currentInscatter, historyInscatter, neighborMin, neighborMax);
