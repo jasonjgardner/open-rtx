@@ -385,7 +385,7 @@ float3 shadeSurfaceAmbientPBR(EnhancedSurface surface, OpenRTXContext ctx)
 
     // Sky hemisphere contribution
     float3 skyIrradiance = lerp(ctx.gameSkyColorDown, ctx.gameSkyColorUp, skyWeight);
-    skyIrradiance = max(skyIrradiance, 0.03);
+    skyIrradiance = max(skyIrradiance, float3(0.03, 0.03, 0.03));
 
     // Ground bounce contribution
     float3 groundColor = float3(0.12, 0.10, 0.08);  // Warmer ground albedo
@@ -470,7 +470,7 @@ float3 renderSkyWithClouds(float3 rayDir, OpenRTXContext ctx)
     SkyOutput sky = evaluateSky(rayDir, ctx.sunDir, ctx.moonDir, ctx.time, true);
 
     // Ensure atmospheric sky also has minimum brightness
-    sky.color = max(sky.color, 0.01);
+    sky.color = max(sky.color, float3(0.01, 0.01, 0.01));
 
     // Blend physical sky with game-provided colors
     float skyDayFactor = getDayFactor(ctx.sunDir);
@@ -532,7 +532,7 @@ float3 renderSkyWithClouds(float3 rayDir, OpenRTXContext ctx)
         10000.0);
 
     // Clamp cloud color to prevent blown-out clouds
-    clouds.color = min(clouds.color, 2.0);
+    clouds.color = min(clouds.color, float3(2.0, 2.0, 2.0));
 
     // Blend clouds with sky - use proper alpha blending
     // Higher minimum transmittance to keep sky visible
