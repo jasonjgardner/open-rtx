@@ -451,6 +451,92 @@
 #endif
 
 // =============================================================================
+// PHYSICALLY-INSPIRED VOLUMETRIC CLOUD SETTINGS
+// =============================================================================
+
+// Cloud type selection
+// 0: Minecraft-style blocky clouds (original)
+// 1: Physically-inspired raymarched volumetric clouds
+#ifndef CLOUD_RENDERING_MODE
+#define CLOUD_RENDERING_MODE 1
+#endif
+
+// Base noise frequency (larger values = smaller cloud features)
+#ifndef CLOUD_BASE_NOISE_FREQ
+#define CLOUD_BASE_NOISE_FREQ 0.0003
+#endif
+
+// Detail noise frequency (erosion at edges)
+#ifndef CLOUD_DETAIL_NOISE_FREQ
+#define CLOUD_DETAIL_NOISE_FREQ 0.003
+#endif
+
+// Height gradient parameters for density profile
+// Controls the shape: flat dense bottoms, soft tapered tops
+#ifndef CLOUD_HEIGHT_GRADIENT_BOTTOM
+#define CLOUD_HEIGHT_GRADIENT_BOTTOM 0.3  // Height fraction where density starts ramping up
+#endif
+
+#ifndef CLOUD_HEIGHT_GRADIENT_TOP
+#define CLOUD_HEIGHT_GRADIENT_TOP 0.85  // Height fraction where density starts ramping down
+#endif
+
+// Anvil effect - how much clouds spread at top (cumulus anvil shape)
+#ifndef CLOUD_ANVIL_BIAS
+#define CLOUD_ANVIL_BIAS 0.3  // 0 = no anvil, 1 = strong anvil spread
+#endif
+
+// Coverage offset for procedural adjustment (shifts coverage threshold)
+#ifndef CLOUD_COVERAGE_OFFSET
+#define CLOUD_COVERAGE_OFFSET 0.0
+#endif
+
+// Extinction coefficient for Beer-Lambert (higher = denser clouds)
+#ifndef CLOUD_EXTINCTION_COEFFICIENT
+#define CLOUD_EXTINCTION_COEFFICIENT 0.04
+#endif
+
+// Light march settings for self-shadowing
+#ifndef CLOUD_SHADOW_MARCH_STEPS
+#define CLOUD_SHADOW_MARCH_STEPS 5  // Steps toward sun for shadow sampling
+#endif
+
+#ifndef CLOUD_SHADOW_MARCH_DISTANCE
+#define CLOUD_SHADOW_MARCH_DISTANCE 250.0  // Max distance to march toward light
+#endif
+
+// Henyey-Greenstein phase function asymmetry (g parameter)
+// Higher values = more forward scattering (silver lining effect)
+#ifndef CLOUD_HG_ASYMMETRY
+#define CLOUD_HG_ASYMMETRY 0.75  // 0.65-0.85 recommended
+#endif
+
+// Secondary scatter approximation strength
+#ifndef CLOUD_MULTISCATTER_STRENGTH
+#define CLOUD_MULTISCATTER_STRENGTH 0.5
+#endif
+
+// Ambient sky contribution to clouds
+#ifndef CLOUD_AMBIENT_STRENGTH
+#define CLOUD_AMBIENT_STRENGTH 0.3
+#endif
+
+// Early-out transmittance threshold (stop marching when nearly opaque)
+#ifndef CLOUD_TRANSMITTANCE_THRESHOLD
+#define CLOUD_TRANSMITTANCE_THRESHOLD 0.01
+#endif
+
+// Jitter amount for TAA (0-1, higher = more jitter)
+#ifndef CLOUD_JITTER_STRENGTH
+#define CLOUD_JITTER_STRENGTH 1.0
+#endif
+
+// Temporal reprojection blend (lower = more accumulation, smoother)
+#ifndef CLOUD_TEMPORAL_BLEND
+#define CLOUD_TEMPORAL_BLEND 0.1
+#endif
+
+// =============================================================================
 // MESH CLOUD SETTINGS (Vanilla Cloud Geometry Enhancement)
 // =============================================================================
 

@@ -499,13 +499,15 @@ float3 renderSkyWithClouds(float3 rayDir, OpenRTXContext ctx)
     float cloudTimeScale = getTimeOfDayScale(ctx.sunDir, ctx.sunColor);
     float3 cloudSunColor = ctx.sunColor * cloudTimeScale * 2.0;  // Moderate multiplier
 
-    CloudOutput clouds = renderVolumetricClouds(
+    // Use UV-aware cloud rendering for proper jitter/TAA support
+    CloudOutput clouds = renderVolumetricCloudsWithUV(
         ctx.viewOrigin,
         rayDir,
         ctx.sunDir,
         cloudSunColor,
         ctx.time,
-        10000.0);
+        10000.0,
+        ctx.screenUV);
 
     // Clamp cloud color to prevent blown-out clouds
     clouds.color = min(clouds.color, 2.0);
