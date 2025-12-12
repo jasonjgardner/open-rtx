@@ -279,8 +279,8 @@ float cloudCombineBlocky(float noiseBase, float noiseCoverage, float rainStrengt
 float cloudSample(float2 coord, float2 wind, float cloudGradient, float sunCoverage,
                   float rainStrength, float dither)
 {
-    // Scale coordinates - higher multiplier = smaller/more detailed clouds
-    coord *= 0.05 * CLOUD_STRETCH;
+    // Note: coord should already be in cloud-space via worldToCloudCoord()
+    // No additional scaling here - all scaling handled by the conversion function
 
 #if CLOUD_BASE_TYPE == 0
     // Perlin-based clouds
@@ -324,6 +324,18 @@ float invLerp(float v, float l, float h)
     // Guard against division by zero
     float range = h - l;
     return saturate((v - l) / max(range, 0.0001));
+}
+
+// Convert world-space XZ coordinates to cloud-space coordinates
+// This ensures consistent scaling across all cloud sampling functions
+// Input: world position in blocks (Minecraft units)
+// Output: normalized cloud coordinates for noise sampling
+float2 worldToCloudCoord(float2 worldXZ)
+{
+    // CLOUD_WORLD_SCALE defines blocks per pattern repetition (default 256)
+    // CLOUD_SCALE is an additional detail multiplier (default 4.0)
+    // CLOUD_STRETCH handles horizontal stretching (default 2.0)
+    return worldXZ / (CLOUD_WORLD_SCALE * CLOUD_SCALE) * CLOUD_STRETCH;
 }
 
 // Get cloud mask based on fog
@@ -393,7 +405,9 @@ CloudOutput drawCloudSkybox(float3 viewPos, float z, float dither, CloudContext 
     float sunCoverage = 0.0;
 #endif
 
-    float convertedHeight = (max(CLOUD_HEIGHT, 128.0) - 72.0) / CLOUD_SCALE;
+    // Cloud layer bounds in world space (blocks)
+    float cloudBaseY = CLOUD_HEIGHT;
+    float cloudTopY = cloudBaseY + float(CLOUD_THICKNESS) * CLOUD_SCALE;
 
     float2 wind = float2(
         ctx.time * CLOUD_SPEED * 0.0005,
@@ -418,14 +432,17 @@ CloudOutput drawCloudSkybox(float3 viewPos, float z, float dither, CloudContext 
         {
             if (cloud > 0.99) break;
 
+            // Calculate world-space height for this sample
 #if CLOUD_BASE_TYPE == 2
-            float planeY = convertedHeight + currentStep * float(CLOUD_THICKNESS) * 0.5;
+            float worldY = cloudBaseY + currentStep * (cloudTopY - cloudBaseY) * 0.5;
 #else
-            float planeY = convertedHeight + currentStep * float(CLOUD_THICKNESS);
+            float worldY = cloudBaseY + currentStep * (cloudTopY - cloudBaseY);
 #endif
 
-            float3 planeCoord = wpos * (planeY / safeWposY);
-            float2 cloudCoord = ctx.cameraPosition.xz * 0.0625 * 16.0 / CLOUD_SCALE + planeCoord.xz;
+            // Ray-plane intersection to get world XZ at this height
+            float distToPlane = (worldY - ctx.cameraPosition.y) / safeWposY;
+            float2 worldXZ = ctx.cameraPosition.xz + wpos.xz * distToPlane;
+            float2 cloudCoord = worldToCloudCoord(worldXZ);
 
             float noise = cloudSample(cloudCoord, wind, currentStep, sunCoverage, ctx.rainStrength, dither);
 
@@ -577,7 +594,10 @@ CloudOutput drawCloudVolumetric(float3 viewPos, float3 cameraPos, float z, float
     float fadeStart = 32.0 / max(ctx.fogDensity, 0.5);
     float fadeEnd = (fadeFaster ? 80.0 : 240.0) / max(ctx.fogDensity, 0.5);
 
-    float xzNormalizeFactor = 10.0 / max(abs(CLOUD_HEIGHT - 72.0), 56.0);
+    // Normalize horizontal distance relative to cloud height above sea level (Y=64)
+    // This controls how quickly clouds fade with horizontal distance
+    float cloudHeightAboveSeaLevel = max(CLOUD_HEIGHT - 64.0, 64.0);
+    float xzNormalizeFactor = 10.0 / cloudHeightAboveSeaLevel;
 
     [loop]
     for (int i = 0; i < samples; i++)
@@ -587,7 +607,7 @@ CloudOutput drawCloudVolumetric(float3 viewPos, float3 cameraPos, float z, float
 
         float cloudGradient = invLerp(samplePos.y, lowerY, upperY);
         float xzNormalizedDistance = length(samplePos.xz - cameraPos.xz) * xzNormalizeFactor;
-        float2 cloudCoord = samplePos.xz / CLOUD_SCALE;
+        float2 cloudCoord = worldToCloudCoord(samplePos.xz);
 
         float noise = cloudSample(cloudCoord, wind, cloudGradient, sunCoverage, ctx.rainStrength, dither);
         noise *= step(lowerY, samplePos.y) * step(samplePos.y, upperY);
@@ -891,9 +911,10 @@ float sampleCloudShadow(float3 worldPos, float3 sunDir, float time)
         sin(time * CLOUD_SPEED * 0.001) * 0.005
     ) * 0.667;
 
-    float2 cloudCoord = cloudPos.xz / CLOUD_SCALE;
+    // Use consistent world-to-cloud coordinate conversion
+    float2 cloudCoord = worldToCloudCoord(cloudPos.xz);
     float cloudGradient = 0.5;  // Middle of cloud layer
-    float density = cloudSample(cloudCoord * 0.004 * CLOUD_STRETCH, wind, cloudGradient, 0.0, 0.0, 0.0);
+    float density = cloudSample(cloudCoord, wind, cloudGradient, 0.0, 0.0, 0.0);
 
     return 1.0 - saturate(density * CLOUD_SHADOW_STRENGTH * 5.0);
 }

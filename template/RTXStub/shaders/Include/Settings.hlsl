@@ -425,6 +425,10 @@
 #define CLOUD_STRETCH 2.0  // Horizontal stretch factor
 #endif
 
+#ifndef CLOUD_WORLD_SCALE
+#define CLOUD_WORLD_SCALE 256.0  // World units (blocks) per cloud pattern repetition
+#endif
+
 #ifndef CLOUD_BRIGHTNESS
 #define CLOUD_BRIGHTNESS 1.0  // Cloud brightness multiplier
 #endif
