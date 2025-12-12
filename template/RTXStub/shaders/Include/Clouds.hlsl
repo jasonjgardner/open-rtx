@@ -320,7 +320,9 @@ float cloudSample(float2 coord, float2 wind, float cloudGradient, float sunCover
 
 float invLerp(float v, float l, float h)
 {
-    return saturate((v - l) / (h - l));
+    // Guard against division by zero
+    float range = h - l;
+    return saturate((v - l) / max(range, 0.0001));
 }
 
 // Get cloud mask based on fog
@@ -402,6 +404,8 @@ CloudOutput drawCloudSkybox(float3 viewPos, float z, float dither, CloudContext 
     if (VoU > 0.025)
     {
         float3 wpos = normalize(viewPos);
+        // Guard against division by near-zero y component
+        float safeWposY = max(abs(wpos.y), 0.001) * sign(wpos.y + 0.0001);
 
         float halfVoL = lerp(abs(VoL) * 0.8, VoL, ctx.shadowFade) * 0.5 + 0.5;
         float halfVoLSqr = halfVoL * halfVoL;
@@ -419,13 +423,14 @@ CloudOutput drawCloudSkybox(float3 viewPos, float z, float dither, CloudContext 
             float planeY = convertedHeight + currentStep * float(CLOUD_THICKNESS);
 #endif
 
-            float3 planeCoord = wpos * (planeY / wpos.y);
+            float3 planeCoord = wpos * (planeY / safeWposY);
             float2 cloudCoord = ctx.cameraPosition.xz * 0.0625 * 16.0 / CLOUD_SCALE + planeCoord.xz;
 
             float noise = cloudSample(cloudCoord, wind, currentStep, sunCoverage, ctx.rainStrength, dither);
 
-            float sampleLighting = pow(currentStep, 1.125 * halfVoLSqr + 0.875) * 0.8 + 0.2;
-            sampleLighting *= 1.0 - pow(noise, noiseLightFactor);
+            // Use max() to avoid undefined behavior when base is 0 with non-integer exponent
+            float sampleLighting = pow(max(currentStep, 0.0001), 1.125 * halfVoLSqr + 0.875) * 0.8 + 0.2;
+            sampleLighting *= 1.0 - pow(max(noise, 0.0001), max(noiseLightFactor, 0.0001));
 
             cloudLighting = lerp(cloudLighting, sampleLighting, noise * (1.0 - cloud * cloud));
             cloud = lerp(cloud, 1.0, noise);
@@ -504,8 +509,10 @@ CloudOutput drawCloudVolumetric(float3 viewPos, float3 cameraPos, float z, float
     float lowerY = CLOUD_HEIGHT;
     float upperY = lowerY + cloudThickness * CLOUD_SCALE;
 
-    float lowerPlane = (lowerY - cameraPos.y) / nWorldPos.y;
-    float upperPlane = (upperY - cameraPos.y) / nWorldPos.y;
+    // Guard against division by near-zero y component
+    float safeNWorldPosY = (abs(nWorldPos.y) < 0.001) ? 0.001 * sign(nWorldPos.y + 0.0001) : nWorldPos.y;
+    float lowerPlane = (lowerY - cameraPos.y) / safeNWorldPosY;
+    float upperPlane = (upperY - cameraPos.y) / safeNWorldPosY;
 
     float nearestPlane = max(min(lowerPlane, upperPlane), 0.0);
     float furthestPlane = max(lowerPlane, upperPlane);
@@ -518,14 +525,17 @@ CloudOutput drawCloudVolumetric(float3 viewPos, float3 cameraPos, float z, float
 
     float3 startPos = cameraPos + nearestPlane * nWorldPos;
 
-    float lengthScaling = abs(cameraPos.y - (upperY + lowerY) * 0.5) / ((upperY - lowerY) * 0.5);
+    float heightRange = max((upperY - lowerY) * 0.5, 0.001);
+    float lengthScaling = abs(cameraPos.y - (upperY + lowerY) * 0.5) / heightRange;
     lengthScaling = saturate((lengthScaling - 1.0) * cloudThickness * 0.125);
 
     float sampleLength = cloudThickness * CLOUD_SCALE / 2.0;
-    sampleLength /= (4.0 * nWorldPos.y * nWorldPos.y) * lengthScaling + 1.0;
+    float lengthDivisor = (4.0 * safeNWorldPosY * safeNWorldPosY) * lengthScaling + 1.0;
+    sampleLength /= max(lengthDivisor, 0.001);
 
     float3 sampleStep = nWorldPos * sampleLength;
-    int samples = int(min(planeDifference / sampleLength, float(maxSamples)) + 1.0);
+    float safeSampleLength = max(sampleLength, 0.001);
+    int samples = int(min(planeDifference / safeSampleLength, float(maxSamples)) + 1.0);
 
     float3 samplePos = startPos + sampleStep * dither;
     float sampleTotalLength = nearestPlane + sampleLength * dither;
@@ -581,8 +591,9 @@ CloudOutput drawCloudVolumetric(float3 viewPos, float3 cameraPos, float z, float
         float noise = cloudSample(cloudCoord, wind, cloudGradient, sunCoverage, ctx.rainStrength, dither);
         noise *= step(lowerY, samplePos.y) * step(samplePos.y, upperY);
 
-        float sampleLighting = pow(cloudGradient, 1.125 * halfVoLSqr + 0.875) * 0.8 + 0.2;
-        sampleLighting *= 1.0 - pow(noise, noiseLightFactor);
+        // Use max() to avoid undefined behavior when base is 0 with non-integer exponent
+        float sampleLighting = pow(max(cloudGradient, 0.0001), 1.125 * halfVoLSqr + 0.875) * 0.8 + 0.2;
+        sampleLighting *= 1.0 - pow(max(noise, 0.0001), max(noiseLightFactor, 0.0001));
 
         float sampleFade = invLerp(xzNormalizedDistance, fadeEnd, fadeStart);
         distanceFade *= lerp(1.0, sampleFade, noise * (1.0 - cloud));
@@ -615,7 +626,13 @@ CloudOutput drawCloudVolumetric(float3 viewPos, float3 cameraPos, float z, float
     cloudLighting *= (1.0 - 0.9 * ctx.rainStrength);
 
     float horizonSunFactor = ctx.sunVisibility * (1.0 - ctx.sunVisibility) * halfVoSSqr * 0.5;
-    float3 horizonSunCol = pow(ctx.lightColor, 4.0 - 3.0 * ctx.sunVisibility);
+    // Use component-wise pow with max() to avoid undefined behavior with zero/negative values
+    float horizonExp = 4.0 - 3.0 * ctx.sunVisibility;
+    float3 horizonSunCol = float3(
+        pow(max(ctx.lightColor.r, 0.0001), horizonExp),
+        pow(max(ctx.lightColor.g, 0.0001), horizonExp),
+        pow(max(ctx.lightColor.b, 0.0001), horizonExp)
+    );
 
     float3 cloudAmbientCol = ctx.ambientColor * (0.3 * ctx.sunVisibility + 0.5);
     float3 cloudLightCol = lerp(ctx.lightColor, horizonSunCol, horizonSunFactor);
@@ -683,9 +700,13 @@ void drawStars(inout float3 color, float3 viewPos, CloudContext ctx)
     float moonFade = smoothstep(-0.997, -0.992, VoL);
     star *= moonFade;
 
-    // Night sky tint
-    float3 nightColor = float3(0.6, 0.7, 1.0);
-    color += star * pow(nightColor, 0.8);
+    // Night sky tint - use component-wise pow to avoid HLSL issues
+    float3 nightColor = float3(
+        pow(0.6, 0.8),
+        pow(0.7, 0.8),
+        pow(1.0, 0.8)
+    );
+    color += star * nightColor;
 }
 
 // =============================================================================
@@ -728,11 +749,13 @@ float3 drawAurora(float3 viewPos, float dither, CloudContext ctx)
     if (VoU > 0.0 && visibility > 0.0)
     {
         float3 wpos = normalize(viewPos);
+        // Guard against division by near-zero y component
+        float safeWposY = max(wpos.y, 0.001);
 
         [loop]
         for (int i = 0; i < AURORA_SAMPLES; i++)
         {
-            float3 planeCoord = wpos * ((8.0 + currentStep * 7.0) / wpos.y) * 0.004;
+            float3 planeCoord = wpos * ((8.0 + currentStep * 7.0) / safeWposY) * 0.004;
 
             float2 coord = ctx.cameraPosition.xz * 0.00004 + planeCoord.xz;
             coord += float2(coord.y, -coord.x) * 0.3;
@@ -746,7 +769,7 @@ float3 drawAurora(float3 viewPos, float dither, CloudContext ctx)
                 noise = noise * noise * 3.0 * sampleStep;
                 noise *= max(sqrt(1.0 - length(planeCoord.xz) * 3.75), 0.0);
 
-                float3 auroraColor = lerp(AURORA_LOW_COLOR, AURORA_HIGH_COLOR, pow(currentStep, 0.4));
+                float3 auroraColor = lerp(AURORA_LOW_COLOR, AURORA_HIGH_COLOR, pow(max(currentStep, 0.0001), 0.4));
                 aurora += noise * auroraColor * exp2(-6.0 * float(i) * sampleStep);
             }
             currentStep += sampleStep;
