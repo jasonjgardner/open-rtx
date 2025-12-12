@@ -51,7 +51,7 @@
 #endif
 
 #ifndef ENABLE_VOLUMETRIC_CLOUDS
-#define ENABLE_VOLUMETRIC_CLOUDS 0  // Disabled: use vanilla mesh with puffy enhancement instead
+#define ENABLE_VOLUMETRIC_CLOUDS 1  // Minecraft-style volumetric clouds
 #endif
 
 #ifndef ENABLE_VOLUMETRIC_LIGHTING
