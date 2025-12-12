@@ -1119,19 +1119,7 @@ float3 computeUnderwaterInscatter(float3 rayDir, float distance, float3 sunDir, 
     return inscatter * (1.0 - transmittance);
 }
 
-// Water transmittance for given depth
-float3 waterTransmittance(float depth)
-{
-    float3 absorption = float3(WATER_ABSORPTION_R, WATER_ABSORPTION_G, WATER_ABSORPTION_B);
-    return exp(-absorption * depth);
-}
-
-// Water inscatter for given depth
-float3 waterInscatter(float depth, float3 sunColor, float sunIntensity)
-{
-    float3 waterTint = float3(0.0, 0.3, 0.5);
-    float3 transmit = waterTransmittance(depth);
-    return waterTint * sunColor * sunIntensity * (1.0 - transmit);
-}
+// Note: waterTransmittance and waterInscatter are defined in Water.hlsl
+// and should be used from there when both files are included via OpenRTX.hlsl
 
 #endif // __OPENRTX_VOLUMETRIC_LIGHTING_HLSL__
