@@ -999,6 +999,18 @@
 #define ENABLE_REFLECTED_CAUSTICS 1  // Caustics on surfaces above water
 #endif
 
+#ifndef CAUSTICS_PHOTON_COUNT_MULTIPLIER
+#define CAUSTICS_PHOTON_COUNT_MULTIPLIER 1.0  // Multiplier for photon count (higher = more accurate but slower)
+#endif
+
+#ifndef CAUSTICS_PHOTON_MAX_BOUNCES
+#define CAUSTICS_PHOTON_MAX_BOUNCES 4  // Maximum number of photon bounces for caustics
+#endif
+
+#ifndef CAUSTICS_FILTER_ITERATIONS
+#define CAUSTICS_FILTER_ITERATIONS 2  // Number of filter passes for caustics smoothing
+#endif
+
 // =============================================================================
 // RAYTRACED REFLECTIONS SETTINGS
 // =============================================================================
