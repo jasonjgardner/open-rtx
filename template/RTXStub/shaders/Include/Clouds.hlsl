@@ -189,9 +189,9 @@ float worleyNoise3D(float3 p, float period)
                 if (cellPos.y < 0.0) cellPos.y += period;
                 if (cellPos.z < 0.0) cellPos.z += period;
 
-                // Random point within this cell
-                float3 point = hash33(cellPos);
-                float3 diff = neighbor + point - f;
+                // Random position within this cell
+                float3 cellPoint = hash33(cellPos);
+                float3 diff = neighbor + cellPoint - f;
                 float dist = dot(diff, diff);
                 minDist = min(minDist, dist);
             }
@@ -583,12 +583,10 @@ CloudOutput renderVolumetricCloudsPhysical(
     // Ray jitter for TAA / anti-banding
     // ===================
     float jitter = 0.0;
-#if CLOUD_JITTER_STRENGTH > 0.0
     // Blue noise-like jitter using screen position
     float2 jitterSeed = screenUV * 1000.0 + time * 17.0;
     jitter = frac(52.9829189 * frac(dot(jitterSeed, float2(0.06711056, 0.00583715))));
     jitter *= CLOUD_JITTER_STRENGTH;
-#endif
 
     // Starting position with jitter
     float3 currentPos = rayOrigin + rayDir * (tEntry + jitter * stepSize);
