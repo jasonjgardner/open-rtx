@@ -155,10 +155,13 @@ float sampleMinecraftCloudDensity(float3 worldPos, float time)
 }
 
 // =============================================================================
-// PHASE FUNCTIONS
+// PHASE FUNCTIONS - Physically-Based Cloud Scattering
 // =============================================================================
 
-// Henyey-Greenstein phase function
+// Henyey-Greenstein phase function with proper normalization
+// g > 0: forward scattering (sunlight glowing through cloud edges)
+// g < 0: backward scattering (slight glow when looking toward sun through thin clouds)
+// g = 0: isotropic scattering
 float cloudPhaseHG(float cosTheta, float g)
 {
     float g2 = g * g;
@@ -166,12 +169,59 @@ float cloudPhaseHG(float cosTheta, float g)
     return (1.0 - g2) / (4.0 * 3.14159265 * pow(max(denom, 0.0001), 1.5));
 }
 
-// Dual-lobe phase function for clouds
+// Schlick phase function approximation (faster than HG, visually similar)
+float cloudPhaseSchlick(float cosTheta, float k)
+{
+    float denom = 1.0 + k * cosTheta;
+    return (1.0 - k * k) / (4.0 * 3.14159265 * denom * denom);
+}
+
+// Dual-lobe phase function for realistic cloud scattering
+// Combines strong forward peak (silver lining) with diffuse backward component
 float cloudPhaseFunction(float cosTheta)
 {
-    float forward = cloudPhaseHG(cosTheta, 0.8);   // Strong forward scattering
-    float back = cloudPhaseHG(cosTheta, -0.3);     // Weak back scattering
-    return lerp(back, forward, 0.7);
+    // Primary forward scattering (g ~ 0.8) - creates bright edges when backlit
+    // This is the dominant effect for sunlight passing through clouds
+    float forward = cloudPhaseHG(cosTheta, CLOUD_PHASE_G1);
+
+    // Backward scattering (g ~ -0.3) - subtle glow when looking toward sun
+    // This creates the soft illumination of cloud faces toward the sun
+    float back = cloudPhaseHG(cosTheta, CLOUD_PHASE_G2);
+
+    // Blend between lobes - higher CLOUD_PHASE_BLEND = more forward scattering
+    return lerp(back, forward, CLOUD_PHASE_BLEND);
+}
+
+// Enhanced multi-lobe phase for more realistic appearance
+// Adds diffuse isotropic component for ambient-lit cloud interiors
+float cloudPhaseEnhanced(float cosTheta, float depth)
+{
+    // Start with dual-lobe phase
+    float phase = cloudPhaseFunction(cosTheta);
+
+    // Add isotropic component for deep cloud interiors
+    // Reduces harsh directional lighting deep inside clouds
+    float isotropic = 1.0 / (4.0 * 3.14159265);
+
+    // Deeper clouds have more isotropic scattering due to multiple bounces
+    float depthFactor = saturate(depth * 0.01);
+    phase = lerp(phase, isotropic, depthFactor * 0.3);
+
+    return phase;
+}
+
+// Powder effect - darkens cloud interiors due to absorption
+// Creates more realistic density variation in clouds
+float cloudPowderEffect(float opticalDepth, float cosTheta)
+{
+    // Forward-viewing rays see more powder effect
+    float viewWeight = saturate(1.0 - cosTheta * 0.5);
+
+    // Beer-powder approximation: darker where light has traveled far
+    float powder = 1.0 - exp(-opticalDepth * 2.0);
+    powder = lerp(1.0, powder, CLOUD_POWDER_STRENGTH * viewWeight);
+
+    return powder;
 }
 
 // =============================================================================
@@ -281,20 +331,32 @@ CloudOutput renderVolumetricClouds(float3 rayOrigin, float3 rayDir, float3 sunDi
     float2 jitterSeed = rayDir.xz * 1000.0 + time * 10.0;
     float jitter = frac(52.9829189 * frac(dot(jitterSeed, float2(0.06711056, 0.00583715))));
 
-    // Phase function
+    // Phase function - use enhanced multi-lobe scattering
     float cosTheta = dot(rayDir, sunDir);
     float phase = cloudPhaseFunction(cosTheta);
 
-    // Time of day scaling
+    // Time of day scaling - sun color affects cloud illumination
     float dayFactor = saturate(sunDir.y * 2.0 + 0.5);
     float timeScale = max(0.05, dayFactor);
 
-    // Ambient from sky
-    float3 ambientColor = sunColor * 0.2 * timeScale;
+    // Sunset/sunrise coloring - reddish light yields orangish clouds
+    float3 effectiveSunColor = sunColor;
+    if (sunDir.y < 0.2 && sunDir.y > -0.1)
+    {
+        // Near horizon, enhance warm tones
+        float horizonFactor = 1.0 - saturate(sunDir.y * 5.0);
+        effectiveSunColor = lerp(sunColor, sunColor * float3(1.2, 0.9, 0.7), horizonFactor * 0.5);
+    }
+
+    // Ambient from sky - affected by time of day
+    float3 ambientColor = effectiveSunColor * 0.2 * timeScale;
+    // Add slight sky blue ambient for daytime
+    ambientColor += float3(0.1, 0.15, 0.25) * dayFactor;
 
     // March through cloud layer
     float3 currentPos = rayOrigin + rayDir * (tMin + jitter * stepSize);
     float currentT = tMin;
+    float accumulatedOpticalDepth = 0.0;
 
     [loop]
     for (int i = 0; i < numSteps; i++)
@@ -310,24 +372,40 @@ CloudOutput renderVolumetricClouds(float3 rayOrigin, float3 rayDir, float3 sunDi
             if (output.depth >= maxDistance)
                 output.depth = currentT;
 
-            // Light sampling
+            // Track optical depth for powder effect
+            float stepOpticalDepth = density * stepSize * CLOUD_SCATTERING_COEFFICIENT;
+            accumulatedOpticalDepth += stepOpticalDepth;
+
+            // Light sampling toward sun
             float lightTrans = sampleLightTransmittance(currentPos, sunDir, time, CLOUD_LIGHT_MARCH_STEPS);
 
-            // Direct + scattered light
-            float3 directLight = sunColor * phase * lightTrans;
+            // Use enhanced phase with depth-dependent isotropic blend
+            float enhancedPhase = cloudPhaseEnhanced(cosTheta, accumulatedOpticalDepth);
 
-            // Multi-scatter approximation
-            float3 scatterLight = sunColor * 0.25 * pow(lightTrans, 0.3) * 0.4;
+            // Apply powder effect for realistic density variation
+            float powder = cloudPowderEffect(accumulatedOpticalDepth, cosTheta);
 
-            // Silver lining when backlit
-            float silverLining = pow(saturate(-cosTheta), 4.0) * lightTrans * 0.3;
+            // Direct sunlight contribution with phase function
+            float3 directLight = effectiveSunColor * enhancedPhase * lightTrans * powder;
 
-            float3 totalLight = directLight + scatterLight + ambientColor + sunColor * silverLining;
+            // Multi-scatter approximation - light that has bounced multiple times
+            // in clouds becomes more isotropic and softer
+            float multiScatterPhase = lerp(enhancedPhase, 1.0 / (4.0 * 3.14159265), 0.5);
+            float3 scatterLight = effectiveSunColor * multiScatterPhase * pow(lightTrans, 0.3) * 0.35;
 
-            // Accumulate
-            float absorption = density * stepSize * CLOUD_SCATTERING_COEFFICIENT;
-            float transmittance = beerLambert(absorption);
+            // Enhanced silver lining effect when backlit
+            // Sunlight glows through thin cloud edges
+            float silverLiningStrength = pow(saturate(-cosTheta), 3.0) * lightTrans;
+            float edgeFactor = 1.0 - saturate(accumulatedOpticalDepth * 0.5); // Stronger at thin edges
+            float3 silverLining = effectiveSunColor * silverLiningStrength * edgeFactor * 0.4;
 
+            // Combine all lighting contributions
+            float3 totalLight = directLight + scatterLight + ambientColor + silverLining;
+
+            // Beer-Lambert absorption
+            float transmittance = beerLambert(stepOpticalDepth);
+
+            // Accumulate with proper energy-conserving integration
             output.color += totalLight * (1.0 - transmittance) * output.transmittance;
             output.transmittance *= transmittance;
         }

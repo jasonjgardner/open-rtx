@@ -273,6 +273,9 @@ struct SurfaceInfo
 
     float3 normal;
 
+    // Cloud flag to inform lighting code to skip specular reflections
+    bool isCloud;
+
     void Init()
     {
         color = 0;
@@ -288,6 +291,8 @@ struct SurfaceInfo
         subsurface = 0;
 
         normal = 0;
+
+        isCloud = false;
     }
 };
 
@@ -625,6 +630,30 @@ SurfaceInfo MaterialVanilla(HitInfo hitInfo, GeometryInfo geometryInfo, ObjectIn
 
     surfaceInfo.color = color.rgb;
     surfaceInfo.alpha = color.a;
+
+    // ==========================================================================
+    // CLOUD MATERIAL HANDLING - Force purely diffuse rendering
+    // ==========================================================================
+    // Clouds should be rendered as fully diffuse surfaces with no specular
+    // reflections. This eliminates the "glossy plane" appearance and ensures
+    // clouds are rendered with proper physically-based scattering.
+    if (objectInstance.flags & kObjectInstanceFlagClouds)
+    {
+        surfaceInfo.isCloud = true;
+
+        // Force fully diffuse material properties to eliminate specular
+        surfaceInfo.roughness = 1.0;
+        surfaceInfo.metalness = 0.0;
+        surfaceInfo.emissive = 0.0;
+        surfaceInfo.subsurface = 0.0;
+
+        // Set vanilla-consistent alpha (0.7 as vanilla Minecraft uses)
+        // This ensures cloud transparency is consistent and not too opaque
+#if !ENABLE_VOLUMETRIC_CLOUDS
+        surfaceInfo.alpha = 0.7;
+#endif
+    }
+
     return surfaceInfo;
 }
 

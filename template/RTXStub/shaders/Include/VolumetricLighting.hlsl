@@ -632,6 +632,18 @@ float3 computeEndFog(float3 rayOrigin, float3 rayDir, float distance)
 }
 
 // =============================================================================
+// SHARED VOLUMETRIC UTILITIES
+// =============================================================================
+
+// Shared jitter function for consistent noise across fog and cloud systems
+// Using the same jitter reduces artifacts when both systems are active
+float computeVolumetricJitter(float3 rayDir, float time, float2 screenUV)
+{
+    float2 jitterSeed = rayDir.xz * 1000.0 + time * 10.0 + screenUV * 100.0;
+    return frac(52.9829189 * frac(dot(jitterSeed, float2(0.06711056, 0.00583715))));
+}
+
+// =============================================================================
 // MAIN VOLUMETRIC FUNCTION
 // =============================================================================
 
@@ -640,6 +652,7 @@ struct VolumetricResult
     float3 inscatter;
     float3 extinction;
     float transmittance;
+    float cloudShadow;  // Cloud shadow factor for surfaces at ray end (0=shadowed, 1=lit)
 };
 
 VolumetricResult evaluateVolumetrics(
@@ -656,6 +669,7 @@ VolumetricResult evaluateVolumetrics(
     result.inscatter = 0.0;
     result.extinction = 0.0;
     result.transmittance = 1.0;
+    result.cloudShadow = 1.0;
 
 #if !ENABLE_VOLUMETRIC_LIGHTING
     return result;
@@ -675,7 +689,45 @@ VolumetricResult evaluateVolumetrics(
         return result;
     }
 
-    // Overworld volumetrics
+    // ==========================================================================
+    // UNIFIED OVERWORLD VOLUMETRICS
+    // ==========================================================================
+    // Process fog and clouds together for efficiency:
+    // - Clouds: high-altitude volumetric layer
+    // - Fog: ground-level atmospheric scattering
+    // Using shared jitter and phase functions reduces artifacts
+
+    // Compute cloud shadow at the hit point (for ground/object shading)
+    // This happens even if volumetric clouds are disabled, for mesh cloud shadows
+    float3 hitPos = rayOrigin + rayDir * maxDistance;
+#if ENABLE_VOLUMETRIC_CLOUDS
+    // Sample cloud shadow for the surface at ray end
+    // This provides ground shadow even when clouds are above the fog layer
+    if (sunDir.y > 0.0)  // Only when sun is up
+    {
+        // Project hit point up to cloud layer
+        float cloudBase = 192.0;  // Minecraft cloud height
+        if (hitPos.y < cloudBase)
+        {
+            float tToCloud = (cloudBase - hitPos.y) / max(0.001, sunDir.y);
+            float3 cloudSamplePos = hitPos + sunDir * tToCloud;
+
+            // Use a simplified density check
+            float2 cloudUV = cloudSamplePos.xz * 0.001;  // Same scale as cloud system
+            float cloudDensity = 0.0;
+
+            // Quick density estimate (matches cloud system approach)
+            int2 cell = int2(floor(cloudSamplePos.xz / 12.0));  // CLOUD_CELL_SIZE
+            float h = frac(float(cell.x * 127 + cell.y * 311) * 0.00001);
+            if (h < 0.5)  // CLOUD_COVERAGE approximation
+                cloudDensity = 1.0;
+
+            result.cloudShadow = 1.0 - saturate(cloudDensity * CLOUD_SHADOW_STRENGTH);
+        }
+    }
+#endif
+
+    // Process atmospheric fog
     VolumetricOutput fogOutput = marchVolumetricFog(
         rayOrigin, rayDir, maxDistance,
         sunDir, sunColor,

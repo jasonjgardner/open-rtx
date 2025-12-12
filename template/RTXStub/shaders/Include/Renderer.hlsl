@@ -110,10 +110,15 @@ void RenderVanilla(HitInfo hitInfo, inout RayState rayState)
     // Force alphatest and opaque materials to have full alpha.
     if (hitInfo.materialType == MATERIAL_TYPE_OPAQUE || hitInfo.materialType == MATERIAL_TYPE_ALPHA_TEST) surfaceInfo.alpha = 1;
 
-    if (objectInstance.flags & kObjectInstanceFlagClouds)
+    if (surfaceInfo.isCloud)
     {
-        light = geometryInfo.color.rgb; // Clouds have vanilla shading baked into vertex color.
-        surfaceInfo.alpha = 0.7;        // Match vanilla clouds alpha
+        // Clouds use vanilla shading baked into vertex color
+        // No specular highlights - purely diffuse rendering
+        light = geometryInfo.color.rgb;
+
+        // Alpha is already set by MaterialVanilla (0.7 for vanilla consistency)
+        // surfaceInfo.roughness = 1.0 and surfaceInfo.metalness = 0.0 are also set
+        // to eliminate any specular reflections
     }
 
     // Apply emissive lighting.

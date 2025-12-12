@@ -240,6 +240,20 @@ float getDayFactor(float3 sunDir)
 // PBR SURFACE SHADING
 // =============================================================================
 
+// Sample cloud shadow attenuation for a surface position
+// Returns 0.0 = fully shadowed by clouds, 1.0 = no cloud shadow
+float sampleCloudShadowAttenuation(float3 worldPos, float3 sunDir, float time)
+{
+#if ENABLE_VOLUMETRIC_CLOUDS && CLOUD_SHADOW_STRENGTH > 0.0
+    // Sample cloud density above this position toward the sun
+    float cloudShadow = sampleCloudShadow(worldPos, sunDir, time);
+    // Apply shadow strength setting
+    return lerp(1.0, cloudShadow, CLOUD_SHADOW_STRENGTH);
+#else
+    return 1.0;
+#endif
+}
+
 // PBR direct lighting only (for shadow application)
 // Returns ONLY direct sun/moon lighting, not ambient
 float3 shadeSurfaceDirectPBR(EnhancedSurface surface, OpenRTXContext ctx)
@@ -249,27 +263,31 @@ float3 shadeSurfaceDirectPBR(EnhancedSurface surface, OpenRTXContext ctx)
     float3 N = surface.normal;
     float3 V = surface.viewDir;
 
+    // Sample cloud shadows for this surface position
+    float cloudShadow = sampleCloudShadowAttenuation(surface.position, ctx.sunDir, ctx.time);
+
     // Clouds are fully diffuse - skip all specular calculations
     if (surface.roughness >= 0.99)
     {
         // Pure diffuse lighting for clouds
         float3 L = ctx.sunDir;
         float NdotL = saturate(dot(N, L));
-        
+
         if (NdotL > 0.0)
         {
             float dayFactor = getDayFactor(ctx.sunDir);
             float timeScale = getTimeOfDayScale(ctx.sunDir, ctx.sunColor);
-            
+
             if (dayFactor > 0.01)
             {
                 // Lambertian diffuse only
                 float3 diffuse = surface.albedo * kInvPi * NdotL;
                 float3 sunLight = ctx.sunColor * timeScale * 3.0;
+                // Cloud shadows don't affect cloud surfaces themselves
                 result += diffuse * sunLight * surface.ao;
             }
         }
-        
+
         return result;
     }
 
@@ -319,11 +337,15 @@ float3 shadeSurfaceDirectPBR(EnhancedSurface surface, OpenRTXContext ctx)
 
             // Sun light using game-provided color with time-of-day scaling
             float3 sunLight = ctx.sunColor * timeScale * 3.0;  // Scale for PBR response
-            result += (diffuse + specular) * sunLight * NdotL * surface.ao;
+
+            // Apply cloud shadow attenuation to direct sunlight
+            // This creates soft cloud shadows on terrain and objects
+            result += (diffuse + specular) * sunLight * NdotL * surface.ao * cloudShadow;
         }
     }
 
     // Moon lighting (much dimmer) - also direct lighting
+    // Cloud shadows also affect moonlight (use same cloudShadow as sun, reversed direction)
     float nightFactor = 1.0 - dayFactor;
     if (nightFactor > 0.01)
     {
@@ -334,7 +356,10 @@ float3 shadeSurfaceDirectPBR(EnhancedSurface surface, OpenRTXContext ctx)
         {
             float3 moonLight = float3(0.6, 0.65, 0.8) * nightFactor * 0.3;
             float3 diffuse = surface.albedo * (1.0 - surface.metalness) * kInvPi;
-            result += diffuse * moonLight * NdotL * surface.ao;
+
+            // Sample cloud shadow for moon direction (clouds block moonlight too)
+            float moonCloudShadow = sampleCloudShadowAttenuation(surface.position, ctx.moonDir, ctx.time);
+            result += diffuse * moonLight * NdotL * surface.ao * moonCloudShadow;
         }
     }
 
