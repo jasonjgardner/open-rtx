@@ -279,7 +279,8 @@ float cloudCombineBlocky(float noiseBase, float noiseCoverage, float rainStrengt
 float cloudSample(float2 coord, float2 wind, float cloudGradient, float sunCoverage,
                   float rainStrength, float dither)
 {
-    coord *= 0.004 * CLOUD_STRETCH;
+    // Scale coordinates - higher multiplier = smaller/more detailed clouds
+    coord *= 0.012 * CLOUD_STRETCH;
 
 #if CLOUD_BASE_TYPE == 0
     // Perlin-based clouds

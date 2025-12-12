@@ -393,15 +393,15 @@
 #endif
 
 #ifndef CLOUD_THICKNESS
-#define CLOUD_THICKNESS 24  // Cloud layer thickness in blocks
+#define CLOUD_THICKNESS 16  // Cloud layer thickness in blocks
 #endif
 
 #ifndef CLOUD_SCALE
-#define CLOUD_SCALE 16.0  // Overall cloud scale multiplier
+#define CLOUD_SCALE 4.0  // Overall cloud scale multiplier (smaller = more detail)
 #endif
 
 #ifndef CIRRUS_HEIGHT
-#define CIRRUS_HEIGHT 400.0  // High cirrus layer
+#define CIRRUS_HEIGHT 350.0  // High cirrus layer
 #endif
 
 // Cloud density and coverage
@@ -410,19 +410,19 @@
 #endif
 
 #ifndef CLOUD_AMOUNT
-#define CLOUD_AMOUNT 10.0  // Cloud amount (lower = more clouds)
+#define CLOUD_AMOUNT 8.0  // Cloud amount (lower = more clouds)
 #endif
 
 #ifndef CLOUD_DENSITY
-#define CLOUD_DENSITY 1.0  // Cloud optical density
+#define CLOUD_DENSITY 1.2  // Cloud optical density
 #endif
 
 #ifndef CLOUD_DETAIL
-#define CLOUD_DETAIL 8.0  // Detail noise strength (1-21)
+#define CLOUD_DETAIL 10.0  // Detail noise strength (1-21)
 #endif
 
 #ifndef CLOUD_STRETCH
-#define CLOUD_STRETCH 1.0  // Horizontal stretch factor
+#define CLOUD_STRETCH 2.0  // Horizontal stretch factor
 #endif
 
 #ifndef CLOUD_BRIGHTNESS
