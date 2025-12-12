@@ -280,7 +280,7 @@ float cloudSample(float2 coord, float2 wind, float cloudGradient, float sunCover
                   float rainStrength, float dither)
 {
     // Scale coordinates - higher multiplier = smaller/more detailed clouds
-    coord *= 0.012 * CLOUD_STRETCH;
+    coord *= 0.05 * CLOUD_STRETCH;
 
 #if CLOUD_BASE_TYPE == 0
     // Perlin-based clouds
