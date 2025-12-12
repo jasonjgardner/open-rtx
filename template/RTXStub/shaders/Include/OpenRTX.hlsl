@@ -244,10 +244,10 @@ float getDayFactor(float3 sunDir)
 // Returns 0.0 = fully shadowed by clouds, 1.0 = no cloud shadow
 float sampleCloudShadowAttenuation(float3 worldPos, float3 sunDir, float time)
 {
-#if ENABLE_VOLUMETRIC_CLOUDS && CLOUD_SHADOW_STRENGTH > 0.0
+#if ENABLE_VOLUMETRIC_CLOUDS
     // Sample cloud density above this position toward the sun
     float cloudShadow = sampleCloudShadow(worldPos, sunDir, time);
-    // Apply shadow strength setting
+    // Apply shadow strength setting (runtime check for strength > 0)
     return lerp(1.0, cloudShadow, CLOUD_SHADOW_STRENGTH);
 #else
     return 1.0;
