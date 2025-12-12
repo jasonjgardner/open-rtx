@@ -28,7 +28,9 @@
 
 #include "Include/Generated/Signature.hlsl"
 #include "Include/Settings.hlsl"
+#include "Include/Sky.hlsl"
 #include "Include/VolumetricLighting.hlsl"
+#include "Include/Util.hlsl"
 
 // =============================================================================
 // FROXEL GRID PARAMETERS
@@ -128,9 +130,11 @@ void CalculateInscatterInline(
 
     // Get camera parameters from view constants
     float3 cameraPos = g_view.viewOriginSteveSpace;
-    float3 cameraForward = -g_view.viewDir;  // View matrix looks down -Z
-    float3 cameraRight = g_view.viewRight;
-    float3 cameraUp = g_view.viewUp;
+
+    // Derive view vectors from getViewDirection (using NDC corners)
+    float3 cameraForward = getViewDirection(float2(0.0, 0.0));
+    float3 cameraRight = normalize(getViewDirection(float2(0.1, 0.0)) - getViewDirection(float2(-0.1, 0.0)));
+    float3 cameraUp = normalize(getViewDirection(float2(0.0, -0.1)) - getViewDirection(float2(0.0, 0.1)));
 
     // Calculate FOV tangent from projection matrix
     // Using aspect ratio and vertical FOV from projection
@@ -165,7 +169,9 @@ void CalculateInscatterInline(
     }
 
     // Blue noise jitter for temporal stability
-    float jitter = blueNoiseDither(dispatchThreadID, g_view.frameIndex);
+    // Use time to derive a pseudo-frame index for temporal variation
+    uint pseudoFrameIndex = uint(g_view.time * 60.0) % 256;
+    float jitter = blueNoiseDither(dispatchThreadID, pseudoFrameIndex);
     float3 jitteredPos = worldPos + rayDir * (jitter - 0.5) * (depth / float(kFroxelDimensions.z));
 
     // Calculate fog density at this position

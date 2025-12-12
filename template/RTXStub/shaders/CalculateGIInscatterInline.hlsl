@@ -29,7 +29,9 @@
 
 #include "Include/Generated/Signature.hlsl"
 #include "Include/Settings.hlsl"
+#include "Include/Sky.hlsl"
 #include "Include/VolumetricLighting.hlsl"
+#include "Include/Util.hlsl"
 
 // =============================================================================
 // GI FROXEL GRID PARAMETERS
@@ -198,9 +200,12 @@ void CalculateGIInscatterInline(
 
     // Get camera parameters
     float3 cameraPos = g_view.viewOriginSteveSpace;
-    float3 cameraForward = -g_view.viewDir;
-    float3 cameraRight = g_view.viewRight;
-    float3 cameraUp = g_view.viewUp;
+
+    // Derive view vectors from getViewDirection (using NDC corners)
+    float3 cameraForward = getViewDirection(float2(0.0, 0.0));
+    float3 cameraRight = normalize(getViewDirection(float2(0.1, 0.0)) - getViewDirection(float2(-0.1, 0.0)));
+    float3 cameraUp = normalize(getViewDirection(float2(0.0, -0.1)) - getViewDirection(float2(0.0, 0.1)));
+
     float2 fovTan = float2(1.0 / g_view.proj[0][0], 1.0 / g_view.proj[1][1]);
 
     // Get world position for this froxel
@@ -229,7 +234,9 @@ void CalculateGIInscatterInline(
     float3 giInscatter = float3(0, 0, 0);
 
     // Random rotation for this froxel (for temporal stability)
-    float3x3 rotation = randomRotation(dispatchThreadID, g_view.frameIndex);
+    // Use time to derive a pseudo-frame index for temporal variation
+    uint pseudoFrameIndex = uint(g_view.time * 60.0) % 256;
+    float3x3 rotation = randomRotation(dispatchThreadID, pseudoFrameIndex);
 
     // Sample incoming radiance from multiple directions
     [unroll]
