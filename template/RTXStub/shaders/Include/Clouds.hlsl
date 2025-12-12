@@ -138,9 +138,9 @@ float cloudWorley(float2 p)
         for (int x = -1; x <= 1; x++)
         {
             float2 neighbor = float2(x, y);
-            float2 point = cloudHash2D(i + neighbor).xx * 0.5 + 0.5;
-            point = 0.5 + 0.5 * sin(6.2831 * point);
-            float2 diff = neighbor + point - f;
+            float2 cellPoint = cloudHash2D(i + neighbor).xx * 0.5 + 0.5;
+            cellPoint = 0.5 + 0.5 * sin(6.2831 * cellPoint);
+            float2 diff = neighbor + cellPoint - f;
             float dist = length(diff);
             minDist = min(minDist, dist);
         }
