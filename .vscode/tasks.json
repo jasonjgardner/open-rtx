@@ -24,10 +24,6 @@
                 "M:\\Games\\Minecraft Preview for Windows\\Content\\shaders\\OpenRTX"
             ],
             "problemMatcher": [],
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            }
         },
         {
             "label": "Sync and Build",
@@ -38,7 +34,7 @@
             "dependsOrder": "sequence",
             "group": {
                 "kind": "build",
-                "isDefault": false
+                "isDefault": true
             }
         }
     ]

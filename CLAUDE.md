@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+See also AGENTS.md for authoritative guidelines for AI agents writing HLSL shader code.
+
 ## Project Overview
 
 OpenRTX is an open-source Minecraft Bedrock RTX shader built on veka0's mcrtx-shader-template. It uses a templating engine to extract data from vanilla material.bin files and generate compilable HLSL shader code.
