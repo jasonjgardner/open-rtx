@@ -492,19 +492,43 @@ float3 renderSkyWithClouds(float3 rayDir, OpenRTXContext ctx)
     skyColor += ctx.sunColor * sunGlow * ctx.sunIntensity * 0.1;
 #endif
 
-#if ENABLE_VOLUMETRIC_CLOUDS
-    // Volumetric clouds
-    // Use time-of-day aware intensity for cloud illumination
-    float cloudDayFactor = getDayFactor(ctx.sunDir);
-    float cloudTimeScale = getTimeOfDayScale(ctx.sunDir, ctx.sunColor);
-    float3 cloudSunColor = ctx.sunColor * cloudTimeScale * 2.0;  // Moderate multiplier
+    // Create cloud context for advanced features
+    CloudContext cloudCtx;
+    cloudCtx.cameraPosition = ctx.viewOrigin;
+    cloudCtx.sunDirection = ctx.sunDir;
+    cloudCtx.lightColor = ctx.sunColor * getTimeOfDayScale(ctx.sunDir, ctx.sunColor) * 2.0;
+    cloudCtx.ambientColor = ctx.sunColor * 0.3;
+    cloudCtx.time = ctx.time;
+    cloudCtx.rainStrength = ctx.rainIntensity;
+    cloudCtx.shadowFade = saturate(ctx.sunDir.y * 2.0 + 0.5);
+    cloudCtx.sunVisibility = saturate(ctx.sunDir.y + 0.1);
+    cloudCtx.moonVisibility = saturate(-ctx.sunDir.y + 0.1);
+    cloudCtx.fogDensity = 1.0;
 
-    CloudOutput clouds = renderVolumetricClouds(
+    // Add stars at night (before clouds so they're behind)
+#if ENABLE_STARS
+    if (cloudCtx.moonVisibility > 0.01)
+    {
+        drawStars(skyColor, rayDir * 1000.0, cloudCtx);
+    }
+#endif
+
+    // Add aurora at night (before clouds)
+#if AURORA_MODE > 0
+    if (cloudCtx.moonVisibility > 0.01)
+    {
+        float dither = frac(52.9829189 * frac(dot(rayDir.xz, float2(0.06711056, 0.00583715))));
+        float3 aurora = drawAurora(rayDir * 1000.0, dither, cloudCtx);
+        skyColor += aurora;
+    }
+#endif
+
+#if ENABLE_VOLUMETRIC_CLOUDS
+    // Volumetric clouds using full context
+    CloudOutput clouds = renderVolumetricCloudsWithContext(
         ctx.viewOrigin,
         rayDir,
-        ctx.sunDir,
-        cloudSunColor,
-        ctx.time,
+        cloudCtx,
         10000.0);
 
     // Clamp cloud color to prevent blown-out clouds

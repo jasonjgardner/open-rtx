@@ -372,17 +372,36 @@
 // VOLUMETRIC CLOUD SETTINGS
 // =============================================================================
 
-// Layer altitudes (meters relative to sea level, Minecraft Y=0)
-#ifndef CLOUD_MIN_HEIGHT
-#define CLOUD_MIN_HEIGHT 1500.0  // Cumulus base (vanilla clouds at Y=192)
+// Cloud rendering mode
+// 0: Skybox (flat projection, faster)
+// 1: Volumetric (true 3D, more realistic)
+#ifndef CLOUD_MODE
+#define CLOUD_MODE 1
 #endif
 
-#ifndef CLOUD_MAX_HEIGHT
-#define CLOUD_MAX_HEIGHT 4000.0  // Cumulus top
+// Cloud base noise type
+// 0: Perlin (smooth, natural)
+// 1: Worley (cellular, more defined)
+// 2: Blocky (Minecraft-style)
+#ifndef CLOUD_BASE_TYPE
+#define CLOUD_BASE_TYPE 0
+#endif
+
+// Layer altitudes
+#ifndef CLOUD_HEIGHT
+#define CLOUD_HEIGHT 192.0  // Base cloud height (Minecraft Y level)
+#endif
+
+#ifndef CLOUD_THICKNESS
+#define CLOUD_THICKNESS 24  // Cloud layer thickness in blocks
+#endif
+
+#ifndef CLOUD_SCALE
+#define CLOUD_SCALE 16.0  // Overall cloud scale multiplier
 #endif
 
 #ifndef CIRRUS_HEIGHT
-#define CIRRUS_HEIGHT 8000.0  // Cirrus layer
+#define CIRRUS_HEIGHT 400.0  // High cirrus layer
 #endif
 
 // Cloud density and coverage
@@ -390,16 +409,28 @@
 #define CLOUD_COVERAGE 0.5  // 0-1, overall cloud coverage
 #endif
 
+#ifndef CLOUD_AMOUNT
+#define CLOUD_AMOUNT 10.0  // Cloud amount (lower = more clouds)
+#endif
+
 #ifndef CLOUD_DENSITY
-#define CLOUD_DENSITY 0.08  // Optical density multiplier
+#define CLOUD_DENSITY 1.0  // Cloud optical density
 #endif
 
-#ifndef CLOUD_DENSITY_MULTIPLIER
-#define CLOUD_DENSITY_MULTIPLIER 2.5  // Cloud thickness multiplier
+#ifndef CLOUD_DETAIL
+#define CLOUD_DETAIL 8.0  // Detail noise strength (1-21)
 #endif
 
-#ifndef CLOUD_DETAIL_STRENGTH
-#define CLOUD_DETAIL_STRENGTH 0.35  // Worley noise erosion
+#ifndef CLOUD_STRETCH
+#define CLOUD_STRETCH 1.0  // Horizontal stretch factor
+#endif
+
+#ifndef CLOUD_BRIGHTNESS
+#define CLOUD_BRIGHTNESS 1.0  // Cloud brightness multiplier
+#endif
+
+#ifndef CLOUD_OPACITY
+#define CLOUD_OPACITY 1.0  // Cloud opacity multiplier
 #endif
 
 #ifndef CLOUD_SHADOW_STRENGTH
@@ -412,7 +443,7 @@
 
 // Ray marching settings
 #ifndef CLOUD_MARCH_STEPS
-#define CLOUD_MARCH_STEPS 64  // Quality vs performance
+#define CLOUD_MARCH_STEPS 32  // Max volumetric samples
 #endif
 
 #ifndef CLOUD_LIGHT_MARCH_STEPS
@@ -420,8 +451,12 @@
 #endif
 
 // Cloud animation
+#ifndef CLOUD_SPEED
+#define CLOUD_SPEED 1.0  // Wind speed multiplier
+#endif
+
 #ifndef CLOUD_WIND_SPEED
-#define CLOUD_WIND_SPEED 20.0  // m/s
+#define CLOUD_WIND_SPEED 20.0  // m/s (legacy)
 #endif
 
 #ifndef CLOUD_WIND_DIRECTION
@@ -448,6 +483,66 @@
 // Powder effect
 #ifndef CLOUD_POWDER_STRENGTH
 #define CLOUD_POWDER_STRENGTH 0.5
+#endif
+
+// Cloud reveal - sun visibility through clouds at horizon
+#ifndef ENABLE_CLOUD_REVEAL
+#define ENABLE_CLOUD_REVEAL 1
+#endif
+
+// =============================================================================
+// AURORA SETTINGS
+// =============================================================================
+
+// Aurora mode
+// 0: Disabled
+// 1: Cold biomes only (requires weather detection)
+// 2: Always visible at night
+#ifndef AURORA_MODE
+#define AURORA_MODE 2
+#endif
+
+// Aurora colors
+#ifndef AURORA_LOW_COLOR
+#define AURORA_LOW_COLOR float3(0.2, 1.0, 0.4)  // Green base
+#endif
+
+#ifndef AURORA_HIGH_COLOR
+#define AURORA_HIGH_COLOR float3(0.4, 0.3, 1.0)  // Purple/blue top
+#endif
+
+// Aurora intensity
+#ifndef AURORA_INTENSITY
+#define AURORA_INTENSITY 1.0
+#endif
+
+// Aurora samples (higher = better quality)
+#ifndef AURORA_SAMPLES
+#define AURORA_SAMPLES 16
+#endif
+
+// =============================================================================
+// STAR SETTINGS
+// =============================================================================
+
+// Enable star rendering
+#ifndef ENABLE_STARS
+#define ENABLE_STARS 1
+#endif
+
+// Star density (0-1, higher = more stars)
+#ifndef STAR_DENSITY
+#define STAR_DENSITY 0.5
+#endif
+
+// Star brightness
+#ifndef STAR_BRIGHTNESS
+#define STAR_BRIGHTNESS 5.0
+#endif
+
+// Star twinkle speed
+#ifndef STAR_TWINKLE_SPEED
+#define STAR_TWINKLE_SPEED 1.0
 #endif
 
 // =============================================================================
