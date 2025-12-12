@@ -137,6 +137,154 @@ float isotropicPhase()
     return 1.0 / (4.0 * kPi);
 }
 
+// Schlick phase function approximation (faster than HG)
+float schlickPhase(float cosTheta, float k)
+{
+    float denom = 1.0 + k * cosTheta;
+    return (1.0 - k * k) / (4.0 * kPi * denom * denom);
+}
+
+// Draine phase function for dust/aerosols
+float drainePhase(float cosTheta, float g, float alpha)
+{
+    float g2 = g * g;
+    float hg = henyeyGreenstein(cosTheta, g);
+    float rayleigh = (1.0 + cosTheta * cosTheta) * 0.75 / (4.0 * kPi);
+    return lerp(hg, rayleigh, alpha);
+}
+
+// =============================================================================
+// MULTI-SCATTERING APPROXIMATION
+// =============================================================================
+// Based on Frostbite's "Physically Based Sky, Atmosphere and Cloud Rendering"
+// Approximates multiple scattering events without expensive path tracing
+
+// Multi-scattering coefficient (how much light is preserved after each scatter)
+#ifndef MULTI_SCATTER_CONTRIBUTION
+#define MULTI_SCATTER_CONTRIBUTION 0.2
+#endif
+
+// Number of scattering octaves to simulate
+#ifndef MULTI_SCATTER_OCTAVES
+#define MULTI_SCATTER_OCTAVES 2
+#endif
+
+// Multi-scattering phase function with energy redistribution
+float multiScatterPhase(float cosTheta, float g, int octave)
+{
+    // Each octave redistributes energy more isotropically
+    float effectiveG = g * pow(0.5, float(octave));
+    float phase = henyeyGreenstein(cosTheta, effectiveG);
+
+    // Add isotropic contribution for higher octaves
+    float isotropicBlend = saturate(float(octave) * 0.3);
+    phase = lerp(phase, isotropicPhase(), isotropicBlend);
+
+    return phase;
+}
+
+// Energy-conserving multi-scatter contribution
+float3 computeMultiScatter(float3 inscatter, float3 extinction, float density)
+{
+    // Approximation: multi-scattered light is more isotropic and less attenuated
+    float3 multiScatterContrib = inscatter * MULTI_SCATTER_CONTRIBUTION;
+
+    // Reduce extinction for multi-scattered light (it finds more paths)
+    float avgExtinction = dot(extinction, float3(0.333, 0.333, 0.334));
+    float multiScatterTransmit = exp(-avgExtinction * density * 0.5);
+
+    return multiScatterContrib * multiScatterTransmit;
+}
+
+// =============================================================================
+// VOLUMETRIC SHADOW FUNCTIONS
+// =============================================================================
+
+// Compute volumetric shadow using ray marching toward light
+float computeVolumetricShadow(float3 worldPos, float3 lightDir, float maxDistance, int numSteps)
+{
+    float shadow = 1.0;
+    float stepSize = maxDistance / float(numSteps);
+    float3 currentPos = worldPos;
+
+    float totalOpticalDepth = 0.0;
+
+    [unroll]
+    for (int i = 0; i < numSteps; i++)
+    {
+        currentPos += lightDir * stepSize;
+
+        // Sample density at this position
+        float density = FOG_DENSITY * calcDensityModifier(currentPos, lightDir, false);
+        totalOpticalDepth += density * stepSize;
+
+        // Early out if fully shadowed
+        if (totalOpticalDepth > 4.0)
+            break;
+    }
+
+    // Convert optical depth to transmittance
+    shadow = exp(-totalOpticalDepth * dot(FOG_SCATTERING_COEFFICIENTS, float3(0.5, 0.5, 0.5)));
+
+    return saturate(shadow);
+}
+
+// Simplified cloud shadow lookup
+float getCloudShadow(float3 worldPos, float3 sunDir)
+{
+#if ENABLE_VOLUMETRIC_CLOUDS
+    // Project position onto cloud layer
+    float cloudHeight = (CLOUD_MIN_HEIGHT + CLOUD_MAX_HEIGHT) * 0.5;
+    float distToCloud = (cloudHeight - worldPos.y) / max(sunDir.y, 0.001);
+
+    if (distToCloud < 0.0 || distToCloud > 10000.0)
+        return 1.0;
+
+    float3 cloudPos = worldPos + sunDir * distToCloud;
+
+    // Simple noise-based cloud shadow (placeholder for actual cloud density)
+    float shadow = 1.0 - CLOUD_SHADOW_STRENGTH * 0.3;
+    return shadow;
+#else
+    return 1.0;
+#endif
+}
+
+// =============================================================================
+// BLUE NOISE DITHERING
+// =============================================================================
+
+// Hash function for blue noise approximation
+uint hashVolumetric(uint x)
+{
+    x = ((x >> 16) ^ x) * 0x45d9f3b;
+    x = ((x >> 16) ^ x) * 0x45d9f3b;
+    x = (x >> 16) ^ x;
+    return x;
+}
+
+// 3D blue noise approximation
+float blueNoise3D(uint3 coord, uint frameIndex)
+{
+    uint hash = hashVolumetric(coord.x + coord.y * 128 + coord.z * 16384 + frameIndex * 2097152);
+    return float(hash) / 4294967295.0;
+}
+
+// Interleaved gradient noise (better for screen-space)
+float interleavedGradientNoise(float2 screenPos, uint frameIndex)
+{
+    float3 magic = float3(0.06711056, 0.00583715, 52.9829189);
+    float2 pos = screenPos + float(frameIndex) * float2(5.588238, 5.588238);
+    return frac(magic.z * frac(dot(pos, magic.xy)));
+}
+
+// Temporal jitter offset for ray marching
+float getTemporalJitter(float2 pixelCoord, uint frameIndex)
+{
+    // Use interleaved gradient noise for smooth temporal AA
+    return interleavedGradientNoise(pixelCoord, frameIndex);
+}
+
 // =============================================================================
 // RAINBOW PHYSICS
 // =============================================================================
@@ -727,6 +875,263 @@ float3 applyVolumetrics(float3 sceneColor, VolumetricResult volumetrics)
     // Allow inscatter to brighten beyond scene color (for god rays, etc.)
     // but cap at reasonable maximum to prevent HDR blowout
     return max(finalColor, 0.0);
+}
+
+// =============================================================================
+// FROXEL GRID SAMPLING
+// =============================================================================
+// Functions for sampling pre-computed volumetric data from 3D froxel grids
+
+// Froxel grid constants
+#ifndef FROXEL_DEPTH_EXPONENT_SAMPLE
+#define FROXEL_DEPTH_EXPONENT_SAMPLE 2.0
+#endif
+
+#ifndef FROXEL_MAX_DEPTH_SAMPLE
+#define FROXEL_MAX_DEPTH_SAMPLE 256.0
+#endif
+
+// Convert linear depth to froxel Z coordinate
+float depthToFroxelZ(float depth, float maxSlices)
+{
+    float normalizedDepth = saturate(depth / FROXEL_MAX_DEPTH_SAMPLE);
+    return maxSlices * pow(normalizedDepth, 1.0 / FROXEL_DEPTH_EXPONENT_SAMPLE);
+}
+
+// Convert screen UV and depth to froxel UV coordinates (for texture sampling)
+float3 screenToFroxelUV(float2 screenUV, float depth, float3 froxelDimensions)
+{
+    float3 froxelUV;
+    froxelUV.xy = screenUV;
+    froxelUV.z = depthToFroxelZ(depth, froxelDimensions.z) / froxelDimensions.z;
+    return saturate(froxelUV);
+}
+
+// Sample pre-computed inscatter from froxel grid with trilinear filtering
+float4 sampleFroxelInscatter(Texture3D<float4> froxelTex, SamplerState samp, float2 screenUV, float depth, float3 froxelDimensions)
+{
+    float3 froxelUV = screenToFroxelUV(screenUV, depth, froxelDimensions);
+    return froxelTex.SampleLevel(samp, froxelUV, 0);
+}
+
+// Integrate froxel inscatter along a ray (front-to-back compositing)
+float4 integrateFroxelRay(Texture3D<float4> froxelTex, SamplerState samp, float2 screenUV, float maxDepth, float3 froxelDimensions, int numSamples)
+{
+    float4 accumulated = float4(0, 0, 0, 1);  // RGB = inscatter, A = transmittance
+
+    float stepSize = maxDepth / float(numSamples);
+
+    for (int i = 0; i < numSamples; i++)
+    {
+        float depth = (float(i) + 0.5) * stepSize;
+        float4 froxelSample = sampleFroxelInscatter(froxelTex, samp, screenUV, depth, froxelDimensions);
+
+        // Front-to-back compositing
+        float3 sliceInscatter = froxelSample.rgb;
+        float sliceTransmittance = froxelSample.a;
+
+        // Add inscatter weighted by current accumulated transmittance
+        accumulated.rgb += sliceInscatter * accumulated.a;
+
+        // Update transmittance
+        accumulated.a *= sliceTransmittance;
+
+        // Early out if opaque
+        if (accumulated.a < 0.01)
+            break;
+    }
+
+    return accumulated;
+}
+
+// =============================================================================
+// ENHANCED RAY MARCHING WITH MULTI-SCATTERING
+// =============================================================================
+
+// Enhanced ray marching with multi-scattering and temporal jitter
+VolumetricOutput marchVolumetricFogEnhanced(
+    float3 rayOrigin,
+    float3 rayDir,
+    float maxDistance,
+    float3 sunDir,
+    float3 sunColor,
+    float rainIntensity,
+    float time,
+    int numSteps,
+    float2 pixelCoord,
+    uint frameIndex)
+{
+    VolumetricOutput output;
+    output.inscatter = 0.0;
+    output.transmittance = 1.0;
+
+#if !ENABLE_VOLUMETRIC_LIGHTING
+    return output;
+#endif
+
+    float effectiveMaxDistance = min(maxDistance, FOG_MAX_DISTANCE);
+    if (effectiveMaxDistance <= 0.01)
+        return output;
+
+    // Adaptive step count
+    int adaptiveSteps = numSteps;
+    if (effectiveMaxDistance < 32.0)
+        adaptiveSteps = max(4, numSteps / 4);
+    else if (effectiveMaxDistance < 64.0)
+        adaptiveSteps = max(8, numSteps / 2);
+
+    float stepSize = effectiveMaxDistance / float(adaptiveSteps);
+
+    // Temporal jitter to reduce banding
+    float jitter = getTemporalJitter(pixelCoord, frameIndex);
+    float3 currentPos = rayOrigin + rayDir * stepSize * jitter;
+
+    // Phase function setup
+    float cosTheta = dot(rayDir, sunDir);
+    float primaryPhase = dualLobePhase(cosTheta, 0.8, -0.3, 0.7);
+
+    // Multi-scatter phase (more isotropic)
+    float multiPhase = multiScatterPhase(cosTheta, 0.4, 1);
+
+    // Media properties
+    float3 scattering = FOG_SCATTERING_COEFFICIENTS * FOG_DENSITY * 10.0;
+    float3 absorption = float3(0.0002, 0.0003, 0.0005);
+    float3 extinction = scattering + absorption;
+
+    float3 cumulativeTransmittance = 1.0;
+    float3 multiScatterAccum = 0.0;
+
+    for (int i = 0; i < adaptiveSteps; i++)
+    {
+        float densityModifier = calcDensityModifier(currentPos, sunDir, false);
+
+#if ENABLE_RAIN_FOG
+        densityModifier = lerp(densityModifier, densityModifier * (1.0 + RAIN_FOG_AMOUNT), rainIntensity);
+#endif
+
+        if (densityModifier > 0.0001)
+        {
+            float3 stepExtinction = extinction * densityModifier * stepSize;
+            float3 stepTransmittance = exp(-stepExtinction);
+
+            float3 lightContribution = 0.0;
+
+#if ENABLE_SUN_FOG
+            // Get volumetric shadow
+            float volShadow = 1.0;
+            #if MULTI_SCATTER_OCTAVES > 0
+            volShadow = computeVolumetricShadow(currentPos, sunDir, 32.0, 4);
+            #endif
+
+            // Cloud shadow
+            float cloudShadow = getCloudShadow(currentPos, sunDir);
+
+            float totalShadow = volShadow * cloudShadow;
+
+            // Primary scattering
+            lightContribution += sunColor * primaryPhase * totalShadow * SUN_FOG_AMOUNT;
+
+            // Multi-scattering contribution (less affected by shadows)
+            float3 multiScatter = sunColor * multiPhase * lerp(totalShadow, 1.0, 0.5) * MULTI_SCATTER_CONTRIBUTION;
+            multiScatterAccum += multiScatter * scattering * densityModifier * stepSize * cumulativeTransmittance;
+#endif
+
+#if ENABLE_STATIC_GI_FOG
+            float3 ambientColor = float3(0.08, 0.10, 0.14);
+            float ambientOcclusion = lerp(0.3, 1.0, saturate(sunDir.y + 0.2));
+            lightContribution += ambientColor * STATIC_GI_FOG_AMOUNT * ambientOcclusion;
+#endif
+
+            float3 stepInscatter = lightContribution * scattering * densityModifier * stepSize;
+            output.inscatter += stepInscatter * cumulativeTransmittance;
+
+            cumulativeTransmittance *= stepTransmittance;
+        }
+
+        currentPos += rayDir * stepSize;
+
+        if (dot(cumulativeTransmittance, float3(0.333, 0.333, 0.334)) < 0.01)
+            break;
+    }
+
+    // Add multi-scatter contribution
+    output.inscatter += multiScatterAccum;
+
+    output.transmittance = dot(cumulativeTransmittance, float3(0.333, 0.333, 0.334));
+
+    return output;
+}
+
+// =============================================================================
+// AERIAL PERSPECTIVE (DISTANCE FOG)
+// =============================================================================
+
+// Simple aerial perspective for very distant objects
+float3 applyAerialPerspective(float3 sceneColor, float distance, float3 sunDir, float3 sunColor)
+{
+#if !ENABLE_VOLUMETRIC_LIGHTING
+    return sceneColor;
+#endif
+
+    // Atmospheric density increases with distance
+    float opticalDepth = distance * FOG_DENSITY * 0.5;
+
+    // Transmittance based on wavelength (Rayleigh-like)
+    float3 transmittance = exp(-opticalDepth * FOG_SCATTERING_COEFFICIENTS * 5.0);
+
+    // In-scattered sky light
+    float sunVisibility = saturate(sunDir.y + 0.1);
+    float3 skyColor = lerp(
+        float3(0.5, 0.6, 0.8),  // Horizon
+        float3(0.2, 0.4, 0.9),  // Zenith
+        saturate(sunDir.y)
+    ) * sunVisibility;
+
+    // Add sun contribution
+    skyColor += sunColor * 0.05 * sunVisibility;
+
+    // Blend scene with atmosphere
+    float3 result = sceneColor * transmittance + skyColor * (1.0 - transmittance);
+
+    return result;
+}
+
+// =============================================================================
+// UNDERWATER VOLUMETRICS
+// =============================================================================
+
+// Enhanced underwater inscatter with caustics hint
+float3 computeUnderwaterInscatter(float3 rayDir, float distance, float3 sunDir, float3 sunColor)
+{
+    // Water absorption (Beer-Lambert)
+    float3 absorption = float3(WATER_ABSORPTION_R, WATER_ABSORPTION_G, WATER_ABSORPTION_B);
+    float3 transmittance = exp(-absorption * distance);
+
+    // In-scattered light (blue tint from scattering)
+    float cosTheta = dot(rayDir, sunDir);
+    float phase = waterFogPhase(cosTheta);
+
+    float3 waterColor = float3(0.0, 0.3, 0.5);  // Deep water color
+    float sunPenetration = saturate(sunDir.y) * exp(-distance * 0.1);
+
+    float3 inscatter = waterColor * (sunColor * phase * sunPenetration + float3(0.02, 0.05, 0.08));
+
+    return inscatter * (1.0 - transmittance);
+}
+
+// Water transmittance for given depth
+float3 waterTransmittance(float depth)
+{
+    float3 absorption = float3(WATER_ABSORPTION_R, WATER_ABSORPTION_G, WATER_ABSORPTION_B);
+    return exp(-absorption * depth);
+}
+
+// Water inscatter for given depth
+float3 waterInscatter(float depth, float3 sunColor, float sunIntensity)
+{
+    float3 waterTint = float3(0.0, 0.3, 0.5);
+    float3 transmit = waterTransmittance(depth);
+    return waterTint * sunColor * sunIntensity * (1.0 - transmit);
 }
 
 #endif // __OPENRTX_VOLUMETRIC_LIGHTING_HLSL__

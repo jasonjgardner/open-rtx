@@ -641,6 +641,99 @@
 #endif
 
 // =============================================================================
+// VOLUMETRIC GI SETTINGS
+// =============================================================================
+
+// Enable froxel-based volumetric GI (uses pre-computed 3D grids)
+#ifndef ENABLE_VOLUMETRIC_GI
+#define ENABLE_VOLUMETRIC_GI 1
+#endif
+
+// Froxel grid depth distribution exponent
+// Higher values place more froxels near the camera
+#ifndef FROXEL_DEPTH_EXPONENT
+#define FROXEL_DEPTH_EXPONENT 2.0
+#endif
+
+// Maximum depth for froxel grid (in blocks)
+#ifndef FROXEL_MAX_DEPTH
+#define FROXEL_MAX_DEPTH 256.0
+#endif
+
+// GI froxel depth exponent (lower resolution grid)
+#ifndef GI_FROXEL_DEPTH_EXPONENT
+#define GI_FROXEL_DEPTH_EXPONENT 2.5
+#endif
+
+// GI maximum depth (blocks)
+#ifndef GI_FROXEL_MAX_DEPTH
+#define GI_FROXEL_MAX_DEPTH 192.0
+#endif
+
+// Number of spherical directions sampled for GI inscatter
+// Higher = better quality, lower = better performance (4, 6, 8 recommended)
+#ifndef GI_INSCATTER_DIRECTIONS
+#define GI_INSCATTER_DIRECTIONS 6
+#endif
+
+// GI inscatter intensity multiplier
+#ifndef GI_INSCATTER_INTENSITY
+#define GI_INSCATTER_INTENSITY 1.0
+#endif
+
+// Enable emissive light contribution to fog
+#ifndef ENABLE_EMISSIVE_FOG
+#define ENABLE_EMISSIVE_FOG 1
+#endif
+
+// GI spatial blur radius (in froxels)
+#ifndef GI_BLUR_RADIUS
+#define GI_BLUR_RADIUS 2
+#endif
+
+// GI blur sigma for Gaussian kernel
+#ifndef GI_BLUR_SIGMA
+#define GI_BLUR_SIGMA 1.5
+#endif
+
+// Depth-aware blur threshold (prevents blur across depth edges)
+#ifndef GI_BLUR_DEPTH_THRESHOLD
+#define GI_BLUR_DEPTH_THRESHOLD 0.2
+#endif
+
+// Direct light inscatter temporal blend factor
+// Lower = smoother but more ghosting (0.05-0.2 recommended)
+#ifndef INSCATTER_TEMPORAL_BLEND
+#define INSCATTER_TEMPORAL_BLEND 0.1
+#endif
+
+// GI inscatter temporal blend factor (lower since GI changes slowly)
+#ifndef GI_INSCATTER_TEMPORAL_BLEND
+#define GI_INSCATTER_TEMPORAL_BLEND 0.05
+#endif
+
+// History rejection threshold (reject history if too different)
+#ifndef INSCATTER_HISTORY_REJECTION_THRESHOLD
+#define INSCATTER_HISTORY_REJECTION_THRESHOLD 0.5
+#endif
+
+// GI history rejection threshold (more lenient)
+#ifndef GI_HISTORY_REJECTION_THRESHOLD
+#define GI_HISTORY_REJECTION_THRESHOLD 0.8
+#endif
+
+// Multi-scattering contribution factor
+// Controls how much multi-scattered light is approximated
+#ifndef MULTI_SCATTER_CONTRIBUTION
+#define MULTI_SCATTER_CONTRIBUTION 0.2
+#endif
+
+// Number of multi-scattering octaves to simulate (0-3)
+#ifndef MULTI_SCATTER_OCTAVES
+#define MULTI_SCATTER_OCTAVES 2
+#endif
+
+// =============================================================================
 // WATER SETTINGS
 // =============================================================================
 
