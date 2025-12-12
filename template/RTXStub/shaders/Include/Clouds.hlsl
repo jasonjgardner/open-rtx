@@ -44,21 +44,20 @@ static const float kCloudLayerThickness = kCloudLayerTop - kCloudLayerBottom;
 // HASH FUNCTIONS FOR PROCEDURAL NOISE
 // =============================================================================
 
-// High-quality 3D hash function (pcg-like)
+// High-quality 3D hash function (avoids sin() precision issues)
 float hash31(float3 p)
 {
-    p = frac(p * float3(443.897, 441.423, 437.195));
-    p += dot(p, p.yzx + 19.19);
+    p = frac(p * float3(0.1031, 0.1030, 0.0973));
+    p += dot(p, p.yxz + 33.33);
     return frac((p.x + p.y) * p.z);
 }
 
-// 3D hash returning float3
+// 3D hash returning float3 - uses integer-like operations for better quality
 float3 hash33(float3 p)
 {
-    p = float3(dot(p, float3(127.1, 311.7, 74.7)),
-               dot(p, float3(269.5, 183.3, 246.1)),
-               dot(p, float3(113.5, 271.9, 124.6)));
-    return frac(sin(p) * 43758.5453123);
+    p = frac(p * float3(0.1031, 0.1030, 0.0973));
+    p += dot(p, p.yxz + 33.33);
+    return frac((p.xxy + p.yxx) * p.zyx);
 }
 
 // Integer hash for consistent random
@@ -76,21 +75,24 @@ uint hashInt(uint x)
 // TILEABLE 3D NOISE FUNCTIONS
 // =============================================================================
 
-// Smooth interpolation for noise
+// Smooth interpolation for noise (quintic for C2 continuity)
 float3 quinticInterp(float3 x)
 {
     return x * x * x * (x * (x * 6.0 - 15.0) + 10.0);
+}
+
+// Helper: wrap coordinates for tiling with proper negative handling
+float3 wrapCoords(float3 p, float period)
+{
+    return p - floor(p / period) * period;
 }
 
 // Gradient noise (Perlin-like) - base shape noise
 // Tileable with period for seamless texturing
 float gradientNoise3D(float3 p, float period)
 {
-    // Tile the coordinates
-    float3 pTiled = fmod(p, period);
-    if (pTiled.x < 0.0) pTiled.x += period;
-    if (pTiled.y < 0.0) pTiled.y += period;
-    if (pTiled.z < 0.0) pTiled.z += period;
+    // Proper tiling that handles negatives correctly
+    float3 pTiled = wrapCoords(p, period);
 
     float3 i = floor(pTiled);
     float3 f = frac(pTiled);
@@ -98,15 +100,25 @@ float gradientNoise3D(float3 p, float period)
     // Smooth interpolation
     float3 u = quinticInterp(f);
 
-    // Gradient vectors at corners (using hashes)
-    float3 ga = hash33(fmod(i + float3(0, 0, 0), period)) * 2.0 - 1.0;
-    float3 gb = hash33(fmod(i + float3(1, 0, 0), period)) * 2.0 - 1.0;
-    float3 gc = hash33(fmod(i + float3(0, 1, 0), period)) * 2.0 - 1.0;
-    float3 gd = hash33(fmod(i + float3(1, 1, 0), period)) * 2.0 - 1.0;
-    float3 ge = hash33(fmod(i + float3(0, 0, 1), period)) * 2.0 - 1.0;
-    float3 gf = hash33(fmod(i + float3(1, 0, 1), period)) * 2.0 - 1.0;
-    float3 gg = hash33(fmod(i + float3(0, 1, 1), period)) * 2.0 - 1.0;
-    float3 gh = hash33(fmod(i + float3(1, 1, 1), period)) * 2.0 - 1.0;
+    // Gradient vectors at corners (using improved hash)
+    float3 ga = hash33(wrapCoords(i + float3(0, 0, 0), period)) * 2.0 - 1.0;
+    float3 gb = hash33(wrapCoords(i + float3(1, 0, 0), period)) * 2.0 - 1.0;
+    float3 gc = hash33(wrapCoords(i + float3(0, 1, 0), period)) * 2.0 - 1.0;
+    float3 gd = hash33(wrapCoords(i + float3(1, 1, 0), period)) * 2.0 - 1.0;
+    float3 ge = hash33(wrapCoords(i + float3(0, 0, 1), period)) * 2.0 - 1.0;
+    float3 gf = hash33(wrapCoords(i + float3(1, 0, 1), period)) * 2.0 - 1.0;
+    float3 gg = hash33(wrapCoords(i + float3(0, 1, 1), period)) * 2.0 - 1.0;
+    float3 gh = hash33(wrapCoords(i + float3(1, 1, 1), period)) * 2.0 - 1.0;
+
+    // Normalize gradients for consistency
+    ga = normalize(ga + 0.0001);
+    gb = normalize(gb + 0.0001);
+    gc = normalize(gc + 0.0001);
+    gd = normalize(gd + 0.0001);
+    ge = normalize(ge + 0.0001);
+    gf = normalize(gf + 0.0001);
+    gg = normalize(gg + 0.0001);
+    gh = normalize(gh + 0.0001);
 
     // Distance vectors
     float3 pa = f - float3(0, 0, 0);
@@ -136,10 +148,7 @@ float gradientNoise3D(float3 p, float period)
 // Value noise - simpler, faster
 float valueNoise3D(float3 p, float period)
 {
-    float3 pTiled = fmod(p, period);
-    if (pTiled.x < 0.0) pTiled.x += period;
-    if (pTiled.y < 0.0) pTiled.y += period;
-    if (pTiled.z < 0.0) pTiled.z += period;
+    float3 pTiled = wrapCoords(p, period);
 
     float3 i = floor(pTiled);
     float3 f = frac(pTiled);
@@ -147,14 +156,14 @@ float valueNoise3D(float3 p, float period)
     float3 u = quinticInterp(f);
 
     // Random values at corners
-    float n000 = hash31(fmod(i + float3(0, 0, 0), period));
-    float n100 = hash31(fmod(i + float3(1, 0, 0), period));
-    float n010 = hash31(fmod(i + float3(0, 1, 0), period));
-    float n110 = hash31(fmod(i + float3(1, 1, 0), period));
-    float n001 = hash31(fmod(i + float3(0, 0, 1), period));
-    float n101 = hash31(fmod(i + float3(1, 0, 1), period));
-    float n011 = hash31(fmod(i + float3(0, 1, 1), period));
-    float n111 = hash31(fmod(i + float3(1, 1, 1), period));
+    float n000 = hash31(wrapCoords(i + float3(0, 0, 0), period));
+    float n100 = hash31(wrapCoords(i + float3(1, 0, 0), period));
+    float n010 = hash31(wrapCoords(i + float3(0, 1, 0), period));
+    float n110 = hash31(wrapCoords(i + float3(1, 1, 0), period));
+    float n001 = hash31(wrapCoords(i + float3(0, 0, 1), period));
+    float n101 = hash31(wrapCoords(i + float3(1, 0, 1), period));
+    float n011 = hash31(wrapCoords(i + float3(0, 1, 1), period));
+    float n111 = hash31(wrapCoords(i + float3(1, 1, 1), period));
 
     return lerp(lerp(lerp(n000, n100, u.x), lerp(n010, n110, u.x), u.y),
                 lerp(lerp(n001, n101, u.x), lerp(n011, n111, u.x), u.y), u.z);
@@ -163,10 +172,7 @@ float valueNoise3D(float3 p, float period)
 // Worley (cellular) noise - for cloud edge breakup
 float worleyNoise3D(float3 p, float period)
 {
-    float3 pTiled = fmod(p, period);
-    if (pTiled.x < 0.0) pTiled.x += period;
-    if (pTiled.y < 0.0) pTiled.y += period;
-    if (pTiled.z < 0.0) pTiled.z += period;
+    float3 pTiled = wrapCoords(p, period);
 
     float3 i = floor(pTiled);
     float3 f = frac(pTiled);
@@ -184,10 +190,7 @@ float worleyNoise3D(float3 p, float period)
             for (int z = -1; z <= 1; z++)
             {
                 float3 neighbor = float3(x, y, z);
-                float3 cellPos = fmod(i + neighbor, period);
-                if (cellPos.x < 0.0) cellPos.x += period;
-                if (cellPos.y < 0.0) cellPos.y += period;
-                if (cellPos.z < 0.0) cellPos.z += period;
+                float3 cellPos = wrapCoords(i + neighbor, period);
 
                 // Random position within this cell
                 float3 cellPoint = hash33(cellPos);
