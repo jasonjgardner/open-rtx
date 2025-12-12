@@ -201,10 +201,10 @@ void CalculateGIInscatterInline(
     // Get camera parameters
     float3 cameraPos = g_view.viewOriginSteveSpace;
 
-    // Derive view vectors from getViewDirection (using NDC corners)
-    float3 cameraForward = getViewDirection(float2(0.0, 0.0));
-    float3 cameraRight = normalize(getViewDirection(float2(0.1, 0.0)) - getViewDirection(float2(-0.1, 0.0)));
-    float3 cameraUp = normalize(getViewDirection(float2(0.0, -0.1)) - getViewDirection(float2(0.0, 0.1)));
+    // Derive view vectors from rayDirFromNDC (using NDC corners)
+    float3 cameraForward = rayDirFromNDC(float2(0.0, 0.0));
+    float3 cameraRight = normalize(rayDirFromNDC(float2(0.1, 0.0)) - rayDirFromNDC(float2(-0.1, 0.0)));
+    float3 cameraUp = normalize(rayDirFromNDC(float2(0.0, -0.1)) - rayDirFromNDC(float2(0.0, 0.1)));
 
     float2 fovTan = float2(1.0 / g_view.proj[0][0], 1.0 / g_view.proj[1][1]);
 
