@@ -599,6 +599,17 @@ SurfaceInfo MaterialVanilla(HitInfo hitInfo, GeometryInfo geometryInfo, ObjectIn
                         normalUV.y += (nudgeSampleCoord.y > 0.5f) ? kNudgeUvEpsilon : -kNudgeUvEpsilon;
                     }
                 }
+
+                // POM FIX: Clamp UV to tile bounds to prevent atlas bleeding artifacts
+                // When sampling heightmaps in a texture atlas, the Gather operation can
+                // fetch texels from neighboring tiles, causing incorrect shadows/normals.
+                // We inset by 1 texel (0.5 for Gather center + 0.5 for sample radius) to
+                // ensure all 4 gathered samples stay within the tile bounds.
+                float2 halfTexelUV = 1.0 / widthHeight;
+                float2 tileMinUV = pbr.colourToNormalUvBias + halfTexelUV;
+                float2 tileMaxUV = pbr.colourToNormalUvBias + pbr.colourToNormalUvScale - halfTexelUV;
+                normalUV = clamp(normalUV, tileMinUV, tileMaxUV);
+
                 float4 heightSamples = colorTex.Gather(pointSampler, normalUV, 0);
                 float2 subPixelCoord = frac(pixelCoord + 0.5);
                 const float kBevelMode = 0.0;
