@@ -358,7 +358,7 @@ struct CloudOutput
 CloudOutput drawCloudSkybox(float3 viewPos, float z, float dither, CloudContext ctx, bool fadeFaster)
 {
     CloudOutput output;
-    output.color = 0.0;
+    output.color = float3(0.0, 0.0, 0.0);
     output.transmittance = 1.0;
     output.depth = 10000.0;
 
@@ -399,7 +399,7 @@ CloudOutput drawCloudSkybox(float3 viewPos, float z, float dither, CloudContext 
         sin(ctx.time * CLOUD_SPEED * 0.001) * 0.005
     ) * 0.667;
 
-    float3 cloudColor = 0.0;
+    float3 cloudColor = float3(0.0, 0.0, 0.0);
 
     if (VoU > 0.025)
     {
@@ -479,7 +479,7 @@ CloudOutput drawCloudVolumetric(float3 viewPos, float3 cameraPos, float z, float
                                 CloudContext ctx, inout float cloudViewLength, bool fadeFaster)
 {
     CloudOutput output;
-    output.color = 0.0;
+    output.color = float3(0.0, 0.0, 0.0);
     output.transmittance = 1.0;
     output.depth = 10000.0;
 
@@ -671,7 +671,9 @@ void drawStars(inout float3 color, float3 viewPos, CloudContext ctx)
 #endif
 
     float3 wpos = viewPos * 100.0;
-    float3 planeCoord = wpos / (wpos.y + length(wpos.xz));
+    // Guard against division by zero
+    float denom = wpos.y + length(wpos.xz);
+    float3 planeCoord = wpos / max(denom, 0.001);
     float2 wind = float2(ctx.time, 0.0);
     float2 coord = planeCoord.xz * 0.4 + ctx.cameraPosition.xz * 0.0001 + wind * 0.00125;
     coord = floor(coord * 1024.0) / 1024.0;
@@ -726,7 +728,7 @@ float auroraSample(float2 coord, float2 wind, float VoU)
 float3 drawAurora(float3 viewPos, float dither, CloudContext ctx)
 {
 #if AURORA_MODE == 0
-    return 0.0;
+    return float3(0.0, 0.0, 0.0);
 #endif
 
     // Temporal dithering
@@ -744,7 +746,7 @@ float3 drawAurora(float3 viewPos, float dither, CloudContext ctx)
         sin(ctx.time * CLOUD_SPEED * 0.05) * 0.00025
     );
 
-    float3 aurora = 0.0;
+    float3 aurora = float3(0.0, 0.0, 0.0);
 
     if (VoU > 0.0 && visibility > 0.0)
     {
@@ -789,7 +791,7 @@ float3 drawAurora(float3 viewPos, float dither, CloudContext ctx)
 float3 renderCirrusClouds(float3 rayDir, float3 sunDir, float3 sunColor, float time)
 {
     if (rayDir.y <= 0.01)
-        return 0.0;
+        return float3(0.0, 0.0, 0.0);
 
     // Project onto high-altitude cirrus plane
     float t = CIRRUS_HEIGHT / rayDir.y;
@@ -808,7 +810,7 @@ float3 renderCirrusClouds(float3 rayDir, float3 sunDir, float3 sunColor, float t
     density = smoothstep(0.35, 0.65, density) * 0.3;
 
     if (density < 0.001)
-        return 0.0;
+        return float3(0.0, 0.0, 0.0);
 
     // Simple Henyey-Greenstein phase function
     float cosTheta = dot(rayDir, sunDir);
