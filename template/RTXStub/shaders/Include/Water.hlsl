@@ -402,30 +402,103 @@ float waterFresnelSchlick(float NdotV, float ior)
 // CAUSTICS
 // =============================================================================
 
-// Procedural caustics pattern
+// Single caustic layer sample (simulates one photon bounce)
+float causticBounce(float2 uv, float time, float bounceIndex)
+{
+    // Each bounce has unique direction and speed based on index
+    float angle = bounceIndex * 2.39996323;  // Golden angle for good distribution
+    float speed = 0.1 + bounceIndex * 0.02;
+    float2 dir = float2(cos(angle), sin(angle));
+
+    float2 uvOffset = uv + dir * time * speed;
+    float scale = 3.0 - bounceIndex * 0.3;  // Varying scales per bounce
+
+    float n1 = waterNoise(uvOffset * scale);
+    float n2 = waterNoise(uvOffset * scale + 0.5);
+
+    return pow(max(abs(n1 - n2), 0.001), 0.5);
+}
+
+// Procedural caustics pattern with photon simulation
+float causticPatternRaw(float2 pos, float time)
+{
+    float2 uv = pos * CAUSTICS_SCALE;
+
+    // Number of photon samples scales with multiplier
+    int sampleCount = max(1, (int)(2.0 * CAUSTICS_PHOTON_COUNT_MULTIPLIER));
+
+    // Accumulate caustic contributions from multiple bounces
+    float caustics = 0.0;
+    float totalWeight = 0.0;
+
+    // Simulate photon bounces - each bounce adds a caustic layer
+    int maxBounces = min(CAUSTICS_PHOTON_MAX_BOUNCES, 8);  // Cap at 8 for performance
+
+    for (int bounce = 0; bounce < maxBounces; bounce++)
+    {
+        // Weight decreases with each bounce (energy loss)
+        float weight = 1.0 / (1.0 + bounce * 0.5);
+
+        // Sample multiple photons per bounce for density
+        for (int sample = 0; sample < sampleCount; sample++)
+        {
+            float sampleOffset = (float)sample / (float)sampleCount;
+            float2 sampleUV = uv + float2(sampleOffset * 0.1, sampleOffset * 0.07);
+
+            caustics += causticBounce(sampleUV, time, (float)bounce + sampleOffset) * weight;
+            totalWeight += weight;
+        }
+    }
+
+    // Normalize by total weight
+    caustics /= max(totalWeight, 0.001);
+
+    // Enhance contrast
+    caustics = pow(max(caustics, 0.0), 2.0);
+
+    return caustics;
+}
+
+// Apply spatial filtering to reduce noise (box filter)
+float causticFilter(float2 pos, float time, float filterRadius)
+{
+#if CAUSTICS_FILTER_ITERATIONS > 0
+    float result = 0.0;
+    float totalWeight = 0.0;
+
+    // Filter kernel size based on iterations
+    int kernelSize = CAUSTICS_FILTER_ITERATIONS;
+    float step = filterRadius / (float)kernelSize;
+
+    for (int x = -kernelSize; x <= kernelSize; x++)
+    {
+        for (int y = -kernelSize; y <= kernelSize; y++)
+        {
+            float2 offset = float2((float)x, (float)y) * step;
+            float dist = length(offset);
+
+            // Gaussian-like weight falloff
+            float weight = exp(-dist * dist / (filterRadius * filterRadius + 0.001));
+
+            result += causticPatternRaw(pos + offset, time) * weight;
+            totalWeight += weight;
+        }
+    }
+
+    return result / max(totalWeight, 0.001);
+#else
+    return causticPatternRaw(pos, time);
+#endif
+}
+
+// Main caustics pattern function
 float causticPattern(float2 pos, float time)
 {
 #if ENABLE_CAUSTICS
-    float2 uv = pos * CAUSTICS_SCALE;
+    // Filter radius scales with caustic scale for consistent appearance
+    float filterRadius = 0.02 / max(CAUSTICS_SCALE, 0.01);
 
-    // Multiple overlapping caustic layers
-    float caustics = 0.0;
-
-    // Layer 1
-    float2 uv1 = uv + float2(time * 0.1, time * 0.05);
-    float n1 = waterNoise(uv1 * 3.0);
-    float n2 = waterNoise(uv1 * 3.0 + 0.5);
-    caustics += pow(abs(n1 - n2), 0.5);
-
-    // Layer 2 (different speed and direction)
-    float2 uv2 = uv + float2(-time * 0.08, time * 0.12);
-    float n3 = waterNoise(uv2 * 2.5);
-    float n4 = waterNoise(uv2 * 2.5 + 0.3);
-    caustics += pow(abs(n3 - n4), 0.5);
-
-    // Normalize and enhance contrast
-    caustics *= 0.5;
-    caustics = pow(caustics, 2.0);
+    float caustics = causticFilter(pos, time, filterRadius);
 
     return caustics * CAUSTICS_INTENSITY;
 #else
@@ -474,7 +547,7 @@ float3 waterCaustics(float3 worldPos, float time, float3 lightDir)
     // Return as light color contribution (white/cyan tinted)
     return float3(0.9, 1.0, 1.0) * caustics * lightFactor;
 #else
-    return 0.0;
+    return float3(0.0, 0.0, 0.0);
 #endif
 }
 
