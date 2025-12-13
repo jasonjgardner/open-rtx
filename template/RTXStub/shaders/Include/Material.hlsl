@@ -582,9 +582,10 @@ SurfaceInfo MaterialVanilla(HitInfo hitInfo, GeometryInfo geometryInfo, ObjectIn
 
             // =============================================================
             // Step 1: POM UV Displacement (runs BEFORE normal map sampling)
+            // Heightmap is stored in the alpha channel of the normal texture
             // =============================================================
 #if ENABLE_POM
-            if (pbr.flags & kPBRTextureDataFlagHasHeightMapTexture)
+            if (pbr.flags & kPBRTextureDataFlagHasNormalTexture)
             {
                 float2 widthHeight;
                 colorTex.GetDimensions(widthHeight.x, widthHeight.y);
@@ -610,7 +611,7 @@ SurfaceInfo MaterialVanilla(HitInfo hitInfo, GeometryInfo geometryInfo, ObjectIn
                 // Compute view distance for LOD fade
                 float viewDistance = length(surfaceInfo.position - g_view.viewOriginSteveSpace);
 
-                // Run full POM ray marching
+                // Run full POM ray marching (uses alpha channel of normal texture as heightmap)
                 POMResult pomResult = computeFullPOM(
                     colorTex, pointSampler,
                     normalUV,
@@ -624,12 +625,6 @@ SurfaceInfo MaterialVanilla(HitInfo hitInfo, GeometryInfo geometryInfo, ObjectIn
                 // Use displaced UV for subsequent texture sampling
                 normalUV = pomResult.uv;
                 surfaceInfo.pomShadow = pomResult.shadow;
-
-                // If no normal map, use POM-derived normal
-                if (!(pbr.flags & kPBRTextureDataFlagHasNormalTexture))
-                {
-                    texNormal = pomResult.normal;
-                }
             }
 #endif
 
@@ -643,7 +638,7 @@ SurfaceInfo MaterialVanilla(HitInfo hitInfo, GeometryInfo geometryInfo, ObjectIn
                 texel = 2 * texel - 1;
                 texNormal = float3(texel, sqrt(max(0, 1 - texel.x * texel.x - texel.y * texel.y)));
             }
-            else if (!(pbr.flags & kPBRTextureDataFlagHasHeightMapTexture) || !ENABLE_POM)
+            else
             {
                 // Fallback: derive normal from heightmap using vanilla method
                 float2 widthHeight;
