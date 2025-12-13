@@ -609,7 +609,7 @@ SurfaceInfo MaterialVanilla(HitInfo hitInfo, GeometryInfo geometryInfo, ObjectIn
                 float3 viewDirTS = mul(TBN, viewDirWorld);
 
                 // Get sun direction and transform to tangent space for POM shadows
-                float3 sunDirWorld = getSunDirection();
+                float3 sunDirWorld = getTrueDirectionToSun();
                 float3 lightDirTS = mul(TBN, sunDirWorld);
 
                 // Compute view distance for LOD fade

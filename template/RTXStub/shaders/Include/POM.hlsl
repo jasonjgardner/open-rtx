@@ -121,15 +121,16 @@ POMResult computePOM(
     result.shadow = 1.0;
 
 #if ENABLE_POM
-    // Calculate distance fade factor
+    // Calculate distance fade factor (runtime check since POM_FADE_DISTANCE is float)
     float fadeFactor = 1.0;
-#if POM_FADE_DISTANCE > 0
-    fadeFactor = saturate(1.0 - (viewDistance - POM_FADE_DISTANCE) / max(POM_FADE_RANGE, 0.001));
-    if (fadeFactor <= 0.0)
+    if (POM_FADE_DISTANCE > 0.0)
     {
-        return result;
+        fadeFactor = saturate(1.0 - (viewDistance - POM_FADE_DISTANCE) / max(POM_FADE_RANGE, 0.001));
+        if (fadeFactor <= 0.0)
+        {
+            return result;
+        }
     }
-#endif
 
     // Early out for flat surfaces (height near 1.0 means no displacement)
     float initialHeight = sampleHeight(heightTex, heightSampler, baseUV, tileMinUV, tileMaxUV, texelSize);
