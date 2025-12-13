@@ -568,7 +568,7 @@ SurfaceInfo MaterialVanilla(HitInfo hitInfo, GeometryInfo geometryInfo, ObjectIn
 #else
         surfaceInfo.roughness = mers.b;
 #endif
-        
+
         surfaceInfo.subsurface = mers.a;
 
         if (pbr.flags & (kPBRTextureDataFlagHasNormalTexture | kPBRTextureDataFlagHasHeightMapTexture))
@@ -579,18 +579,13 @@ SurfaceInfo MaterialVanilla(HitInfo hitInfo, GeometryInfo geometryInfo, ObjectIn
             float3 bitangent = normalize(mul(geometryInfo.bitangent, (float3x3)objectInstance.modelToWorld));
 
             float3 texNormal = float3(0, 0, 1);
-            if (pbr.flags & kPBRTextureDataFlagHasNormalTexture)
-            {
-                float2 texel = colorTex.SampleLevel(pointSampler, normalUV, 0).rg;
-                texel = 2 * texel - 1;
-                texNormal = float3(texel, sqrt(max(0, 1 - texel.x * texel.x - texel.y * texel.y)));
-            }
-            else
-            {
-                // =============================================================
-                // Full Parallax Occlusion Mapping (POM) with ray marching
-                // =============================================================
 
+            // =============================================================
+            // Step 1: POM UV Displacement (runs BEFORE normal map sampling)
+            // =============================================================
+#if ENABLE_POM
+            if (pbr.flags & kPBRTextureDataFlagHasHeightMapTexture)
+            {
                 float2 widthHeight;
                 colorTex.GetDimensions(widthHeight.x, widthHeight.y);
                 float2 texelSize = 1.0 / widthHeight;
@@ -599,8 +594,8 @@ SurfaceInfo MaterialVanilla(HitInfo hitInfo, GeometryInfo geometryInfo, ObjectIn
                 float2 tileMinUV = pbr.colourToNormalUvBias;
                 float2 tileMaxUV = pbr.colourToNormalUvBias + pbr.colourToNormalUvScale;
 
-                // Compute view direction in world space
-                float3 viewDirWorld = normalize(surfaceInfo.position - g_view.viewOriginSteveSpace);
+                // Compute view direction in world space (from surface toward camera)
+                float3 viewDirWorld = normalize(g_view.viewOriginSteveSpace - surfaceInfo.position);
 
                 // Build TBN matrix (tangent space basis)
                 float3x3 TBN = float3x3(tangent, bitangent, geometryInfo.geometryNormal);
@@ -615,7 +610,6 @@ SurfaceInfo MaterialVanilla(HitInfo hitInfo, GeometryInfo geometryInfo, ObjectIn
                 // Compute view distance for LOD fade
                 float viewDistance = length(surfaceInfo.position - g_view.viewOriginSteveSpace);
 
-#if ENABLE_POM
                 // Run full POM ray marching
                 POMResult pomResult = computeFullPOM(
                     colorTex, pointSampler,
@@ -627,12 +621,37 @@ SurfaceInfo MaterialVanilla(HitInfo hitInfo, GeometryInfo geometryInfo, ObjectIn
                     viewDistance
                 );
 
-                // Use displaced UV and computed normal
+                // Use displaced UV for subsequent texture sampling
                 normalUV = pomResult.uv;
-                texNormal = pomResult.normal;
                 surfaceInfo.pomShadow = pomResult.shadow;
-#else
-                // Fallback: simple normal perturbation from heightmap (original behavior)
+
+                // If no normal map, use POM-derived normal
+                if (!(pbr.flags & kPBRTextureDataFlagHasNormalTexture))
+                {
+                    texNormal = pomResult.normal;
+                }
+            }
+#endif
+
+            // =============================================================
+            // Step 2: Normal Map Sampling (at potentially displaced UV)
+            // =============================================================
+            if (pbr.flags & kPBRTextureDataFlagHasNormalTexture)
+            {
+                // Sample normal map at the (possibly POM-displaced) UV
+                float2 texel = colorTex.SampleLevel(pointSampler, normalUV, 0).rg;
+                texel = 2 * texel - 1;
+                texNormal = float3(texel, sqrt(max(0, 1 - texel.x * texel.x - texel.y * texel.y)));
+            }
+            else if (!(pbr.flags & kPBRTextureDataFlagHasHeightMapTexture) || !ENABLE_POM)
+            {
+                // Fallback: derive normal from heightmap using vanilla method
+                float2 widthHeight;
+                colorTex.GetDimensions(widthHeight.x, widthHeight.y);
+                float2 texelSize = 1.0 / widthHeight;
+                float2 tileMinUV = pbr.colourToNormalUvBias;
+                float2 tileMaxUV = pbr.colourToNormalUvBias + pbr.colourToNormalUvScale;
+
                 float2 pixelCoord = normalUV * widthHeight;
                 {
                     const float kNudgePixelCentreDistEpsilon = 0.0625;
@@ -669,8 +688,8 @@ SurfaceInfo MaterialVanilla(HitInfo hitInfo, GeometryInfo geometryInfo, ObjectIn
                 texNormal.y = (axisSamplePair[axisSampleIndices.x] - axisSamplePair[axisSampleIndices.y]);
                 texNormal.z = g_view.recipHeightMapDepth;
                 texNormal = normalize(texNormal);
-#endif
             }
+
             // TODO: in the future make normal computations relative to vertex normal (doesn't make sense to do it now since entities have no PBR textures and blocks have no vertex normals).
             surfaceInfo.normal = mul(texNormal, float3x3(tangent, bitangent, geometryInfo.geometryNormal));
         }
