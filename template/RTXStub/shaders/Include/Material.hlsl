@@ -27,6 +27,7 @@
 #include "Generated/Signature.hlsl"
 #include "Constants.hlsl"
 #include "Util.hlsl"
+#include "POM.hlsl"
 
 struct HitInfo
 {
@@ -273,6 +274,9 @@ struct SurfaceInfo
 
     float3 normal;
 
+    // POM self-shadow factor (0 = fully shadowed, 1 = fully lit)
+    float pomShadow;
+
     void Init()
     {
         color = 0;
@@ -288,6 +292,7 @@ struct SurfaceInfo
         subsurface = 0;
 
         normal = 0;
+        pomShadow = 1.0;
     }
 };
 
@@ -582,9 +587,52 @@ SurfaceInfo MaterialVanilla(HitInfo hitInfo, GeometryInfo geometryInfo, ObjectIn
             }
             else
             {
-                // This code is based on deferred rendering implementation of calculateTangentNormalFromHeightmap()
+                // =============================================================
+                // Full Parallax Occlusion Mapping (POM) with ray marching
+                // =============================================================
+
                 float2 widthHeight;
                 colorTex.GetDimensions(widthHeight.x, widthHeight.y);
+                float2 texelSize = 1.0 / widthHeight;
+
+                // Calculate tile bounds for UV clamping (prevents atlas bleeding)
+                float2 tileMinUV = pbr.colourToNormalUvBias;
+                float2 tileMaxUV = pbr.colourToNormalUvBias + pbr.colourToNormalUvScale;
+
+                // Compute view direction in world space
+                float3 viewDirWorld = normalize(surfaceInfo.position - g_view.viewOriginSteveSpace);
+
+                // Build TBN matrix (tangent space basis)
+                float3x3 TBN = float3x3(tangent, bitangent, geometryInfo.geometryNormal);
+
+                // Transform view direction to tangent space
+                float3 viewDirTS = mul(TBN, viewDirWorld);
+
+                // Get sun direction and transform to tangent space for POM shadows
+                float3 sunDirWorld = getSunDirection();
+                float3 lightDirTS = mul(TBN, sunDirWorld);
+
+                // Compute view distance for LOD fade
+                float viewDistance = length(surfaceInfo.position - g_view.viewOriginSteveSpace);
+
+#if ENABLE_POM
+                // Run full POM ray marching
+                POMResult pomResult = computeFullPOM(
+                    colorTex, pointSampler,
+                    normalUV,
+                    viewDirTS,
+                    lightDirTS,
+                    tileMinUV, tileMaxUV,
+                    texelSize,
+                    viewDistance
+                );
+
+                // Use displaced UV and computed normal
+                normalUV = pomResult.uv;
+                texNormal = pomResult.normal;
+                surfaceInfo.pomShadow = pomResult.shadow;
+#else
+                // Fallback: simple normal perturbation from heightmap (original behavior)
                 float2 pixelCoord = normalUV * widthHeight;
                 {
                     const float kNudgePixelCentreDistEpsilon = 0.0625;
@@ -600,15 +648,11 @@ SurfaceInfo MaterialVanilla(HitInfo hitInfo, GeometryInfo geometryInfo, ObjectIn
                     }
                 }
 
-                // POM FIX: Clamp UV to tile bounds to prevent atlas bleeding artifacts
-                // When sampling heightmaps in a texture atlas, the Gather operation can
-                // fetch texels from neighboring tiles, causing incorrect shadows/normals.
-                // We inset by 1 texel (0.5 for Gather center + 0.5 for sample radius) to
-                // ensure all 4 gathered samples stay within the tile bounds.
-                float2 halfTexelUV = 1.0 / widthHeight;
-                float2 tileMinUV = pbr.colourToNormalUvBias + halfTexelUV;
-                float2 tileMaxUV = pbr.colourToNormalUvBias + pbr.colourToNormalUvScale - halfTexelUV;
-                normalUV = clamp(normalUV, tileMinUV, tileMaxUV);
+                // Clamp UV to tile bounds
+                float2 halfTexelUV = texelSize;
+                float2 safeMinUV = tileMinUV + halfTexelUV;
+                float2 safeMaxUV = tileMaxUV - halfTexelUV;
+                normalUV = clamp(normalUV, safeMinUV, safeMaxUV);
 
                 float4 heightSamples = colorTex.Gather(pointSampler, normalUV, 0);
                 float2 subPixelCoord = frac(pixelCoord + 0.5);
@@ -625,6 +669,7 @@ SurfaceInfo MaterialVanilla(HitInfo hitInfo, GeometryInfo geometryInfo, ObjectIn
                 texNormal.y = (axisSamplePair[axisSampleIndices.x] - axisSamplePair[axisSampleIndices.y]);
                 texNormal.z = g_view.recipHeightMapDepth;
                 texNormal = normalize(texNormal);
+#endif
             }
             // TODO: in the future make normal computations relative to vertex normal (doesn't make sense to do it now since entities have no PBR textures and blocks have no vertex normals).
             surfaceInfo.normal = mul(texNormal, float3x3(tangent, bitangent, geometryInfo.geometryNormal));

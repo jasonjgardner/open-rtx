@@ -257,6 +257,75 @@
 #endif
 
 // =============================================================================
+// PARALLAX OCCLUSION MAPPING (POM) SETTINGS
+// =============================================================================
+
+// Master toggle for POM (requires heightmap in texture alpha channel)
+#ifndef ENABLE_POM
+#define ENABLE_POM 1
+#endif
+
+// POM depth - how deep the parallax effect appears (in UV units)
+// Higher values = deeper/more pronounced effect
+// 0.02-0.05 = subtle, 0.1 = moderate, 0.2+ = extreme
+#ifndef POM_DEPTH
+#define POM_DEPTH 0.05
+#endif
+
+// Number of ray march samples for POM
+// Higher = better quality but more expensive
+// 16 = fast, 32 = balanced, 64 = high quality
+#ifndef POM_SAMPLES
+#define POM_SAMPLES 32
+#endif
+
+// Minimum samples (used at perpendicular viewing angles)
+#ifndef POM_SAMPLES_MIN
+#define POM_SAMPLES_MIN 8
+#endif
+
+// Maximum samples (used at grazing angles)
+#ifndef POM_SAMPLES_MAX
+#define POM_SAMPLES_MAX 64
+#endif
+
+// Enable linear interpolation between samples for smoother results
+#ifndef POM_LINEAR_SEARCH
+#define POM_LINEAR_SEARCH 1
+#endif
+
+// Enable POM self-shadowing (traces rays toward light source)
+#ifndef ENABLE_POM_SHADOWS
+#define ENABLE_POM_SHADOWS 1
+#endif
+
+// Shadow softness (higher = softer shadows)
+#ifndef POM_SHADOW_SOFTNESS
+#define POM_SHADOW_SOFTNESS 0.5
+#endif
+
+// Number of shadow samples
+#ifndef POM_SHADOW_SAMPLES
+#define POM_SHADOW_SAMPLES 16
+#endif
+
+// Enable sharp slope normals at pixel boundaries (Minecraft-style hard edges)
+#ifndef ENABLE_POM_SLOPE_NORMALS
+#define ENABLE_POM_SLOPE_NORMALS 1
+#endif
+
+// Distance fade for POM (reduces to normal mapping at distance)
+// Set to 0 to disable distance fade
+#ifndef POM_FADE_DISTANCE
+#define POM_FADE_DISTANCE 32.0
+#endif
+
+// Fade range (how gradually POM fades out)
+#ifndef POM_FADE_RANGE
+#define POM_FADE_RANGE 16.0
+#endif
+
+// =============================================================================
 // SUN/MOON SETTINGS
 // =============================================================================
 
