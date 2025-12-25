@@ -32,6 +32,7 @@
 #include "Include/Renderer.hlsl"
 #include "Include/Util.hlsl"
 #include "Include/OpenRTX.hlsl"
+#include "Include/GI.hlsl"
 
 // =============================================================================
 // ENHANCED RAY STATE
@@ -1130,10 +1131,46 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
 #endif
 
     // =================================================================
-    // EMISSIVE GI (Light from glowing blocks illuminating surroundings)
+    // GLOBAL ILLUMINATION (Comprehensive indirect lighting)
     // =================================================================
-#if OPENRTX_ENABLED && ENABLE_EMISSIVE_GI
-    // Only apply emissive GI to non-emissive opaque surfaces
+#if OPENRTX_ENABLED && ENABLE_ADVANCED_GI
+    // Only apply GI to non-emissive opaque surfaces
+    if (isOpaque && surfaceInfo.emissive < 0.1 && !isCloud)
+    {
+        // Build material data for GI
+        GIMaterial giMaterial;
+        giMaterial.albedo = surfaceInfo.color;
+        giMaterial.roughness = surfaceInfo.roughness;
+        giMaterial.metalness = surfaceInfo.metalness;
+        giMaterial.emission = surfaceInfo.color * surfaceInfo.emissive;
+        giMaterial.subsurface = surfaceInfo.subsurface;
+
+        // Calculate full GI
+        GIResult gi = calculateGI(
+            surfaceInfo.position,
+            surfaceInfo.normal,
+            -rayState.rayDesc.Direction,  // View direction
+            giMaterial,
+            ctx.sunDir,
+            ctx.sunColor,
+            ctx.sunIntensity,
+            ctx.skyColor,
+            pixelCoord,
+            ctx.time,
+            GI_QUALITY);
+
+        // Apply GI to lighting
+        // Diffuse GI adds indirect bounced light
+        light += gi.diffuse;
+
+        // Emission from nearby emissive blocks
+        light += gi.emission;
+
+        // Apply ambient occlusion from GI
+        light *= lerp(1.0, gi.ao, GI_AO_STRENGTH);
+    }
+#elif OPENRTX_ENABLED && ENABLE_EMISSIVE_GI
+    // Fallback to simple emissive GI
     if (isOpaque && surfaceInfo.emissive < 0.1)
     {
         float3 emissiveGI = sampleEmissiveLight(

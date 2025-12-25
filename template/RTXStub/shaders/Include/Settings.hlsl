@@ -180,6 +180,188 @@
 #endif
 
 // =============================================================================
+// ADVANCED GI SETTINGS (Path-traced Global Illumination)
+// =============================================================================
+
+// Master toggle for advanced GI system
+#ifndef ENABLE_ADVANCED_GI
+#define ENABLE_ADVANCED_GI 1
+#endif
+
+// Maximum distance for GI ray tracing (in blocks)
+#ifndef GI_MAX_DISTANCE
+#define GI_MAX_DISTANCE 64.0
+#endif
+
+// Distance falloff rate for GI (higher = faster falloff)
+#ifndef GI_DISTANCE_FALLOFF
+#define GI_DISTANCE_FALLOFF 0.02
+#endif
+
+// -----------------------------------------------------------------------------
+// Sunlight GI (Direct sun contribution to indirect lighting)
+// -----------------------------------------------------------------------------
+
+#ifndef GI_SUNLIGHT
+#define GI_SUNLIGHT 1
+#endif
+
+#ifndef GI_SUNLIGHT_STRENGTH
+#define GI_SUNLIGHT_STRENGTH 0.5
+#endif
+
+// -----------------------------------------------------------------------------
+// Skylight GI (Ambient hemisphere sampling)
+// -----------------------------------------------------------------------------
+
+#ifndef GI_SKYLIGHT
+#define GI_SKYLIGHT 1
+#endif
+
+#ifndef GI_SKYLIGHT_SAMPLES
+#define GI_SKYLIGHT_SAMPLES 4
+#endif
+
+#ifndef GI_SKYLIGHT_STRENGTH
+#define GI_SKYLIGHT_STRENGTH 0.8
+#endif
+
+// -----------------------------------------------------------------------------
+// Blocklight GI (Emissive light sources - torches, lava, etc.)
+// -----------------------------------------------------------------------------
+
+#ifndef GI_BLOCKLIGHT
+#define GI_BLOCKLIGHT 1
+#endif
+
+#ifndef GI_BLOCKLIGHT_SAMPLES
+#define GI_BLOCKLIGHT_SAMPLES 6
+#endif
+
+#ifndef GI_BLOCKLIGHT_RANGE
+#define GI_BLOCKLIGHT_RANGE 24.0
+#endif
+
+#ifndef GI_BLOCKLIGHT_FALLOFF
+#define GI_BLOCKLIGHT_FALLOFF 0.05
+#endif
+
+#ifndef GI_BLOCKLIGHT_STRENGTH
+#define GI_BLOCKLIGHT_STRENGTH 1.2
+#endif
+
+// -----------------------------------------------------------------------------
+// Diffuse Bounce GI (Multi-bounce indirect lighting)
+// -----------------------------------------------------------------------------
+
+#ifndef GI_DIFFUSE_BOUNCES
+#define GI_DIFFUSE_BOUNCES 1
+#endif
+
+#ifndef GI_DIFFUSE_SAMPLES
+#define GI_DIFFUSE_SAMPLES 4
+#endif
+
+#ifndef GI_DIFFUSE_STRENGTH
+#define GI_DIFFUSE_STRENGTH 0.6
+#endif
+
+// Maximum number of light bounces (1 = single bounce, 2+ = multi-bounce)
+#ifndef GI_MAX_BOUNCES
+#define GI_MAX_BOUNCES 1
+#endif
+
+// -----------------------------------------------------------------------------
+// Specular GI (Glossy reflections via GI)
+// -----------------------------------------------------------------------------
+
+#ifndef GI_SPECULAR
+#define GI_SPECULAR 1
+#endif
+
+#ifndef GI_SPECULAR_SAMPLES
+#define GI_SPECULAR_SAMPLES 2
+#endif
+
+#ifndef GI_SPECULAR_STRENGTH
+#define GI_SPECULAR_STRENGTH 0.8
+#endif
+
+// Maximum roughness for specular GI (skip for rough surfaces)
+#ifndef GI_SPECULAR_MAX_ROUGHNESS
+#define GI_SPECULAR_MAX_ROUGHNESS 0.5
+#endif
+
+// -----------------------------------------------------------------------------
+// Ambient Occlusion (RTAO)
+// -----------------------------------------------------------------------------
+
+#ifndef GI_AMBIENT_OCCLUSION
+#define GI_AMBIENT_OCCLUSION 1
+#endif
+
+#ifndef GI_AO_SAMPLES
+#define GI_AO_SAMPLES 4
+#endif
+
+#ifndef GI_AO_RADIUS
+#define GI_AO_RADIUS 2.0
+#endif
+
+#ifndef GI_AO_STRENGTH
+#define GI_AO_STRENGTH 0.8
+#endif
+
+// -----------------------------------------------------------------------------
+// GI Quality Presets
+// -----------------------------------------------------------------------------
+// 0: Low (fast, fewer samples)
+// 1: Medium (balanced)
+// 2: High (quality, more samples)
+// 3: Ultra (maximum quality)
+#ifndef GI_QUALITY
+#define GI_QUALITY 1
+#endif
+
+#if GI_QUALITY == 0
+    // Low quality overrides
+    #undef GI_SKYLIGHT_SAMPLES
+    #undef GI_BLOCKLIGHT_SAMPLES
+    #undef GI_DIFFUSE_SAMPLES
+    #undef GI_SPECULAR_SAMPLES
+    #undef GI_AO_SAMPLES
+    #define GI_SKYLIGHT_SAMPLES 1
+    #define GI_BLOCKLIGHT_SAMPLES 2
+    #define GI_DIFFUSE_SAMPLES 2
+    #define GI_SPECULAR_SAMPLES 1
+    #define GI_AO_SAMPLES 2
+#elif GI_QUALITY == 2
+    // High quality overrides
+    #undef GI_SKYLIGHT_SAMPLES
+    #undef GI_BLOCKLIGHT_SAMPLES
+    #undef GI_DIFFUSE_SAMPLES
+    #undef GI_SPECULAR_SAMPLES
+    #undef GI_AO_SAMPLES
+    #define GI_SKYLIGHT_SAMPLES 8
+    #define GI_BLOCKLIGHT_SAMPLES 12
+    #define GI_DIFFUSE_SAMPLES 8
+    #define GI_SPECULAR_SAMPLES 4
+    #define GI_AO_SAMPLES 8
+#elif GI_QUALITY == 3
+    // Ultra quality overrides
+    #undef GI_SKYLIGHT_SAMPLES
+    #undef GI_BLOCKLIGHT_SAMPLES
+    #undef GI_DIFFUSE_SAMPLES
+    #undef GI_SPECULAR_SAMPLES
+    #undef GI_AO_SAMPLES
+    #define GI_SKYLIGHT_SAMPLES 16
+    #define GI_BLOCKLIGHT_SAMPLES 24
+    #define GI_DIFFUSE_SAMPLES 16
+    #define GI_SPECULAR_SAMPLES 8
+    #define GI_AO_SAMPLES 16
+#endif
+
+// =============================================================================
 // BRDF SETTINGS
 // =============================================================================
 
