@@ -162,7 +162,7 @@ GIResult initGIResult()
 // Trace a single occlusion ray using hardware RT
 float traceOcclusionRay(float3 origin, float3 direction, float maxDistance)
 {
-    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> aoQuery;
+    RayQuery<RAY_FLAG_NONE> aoQuery;
     RayDesc aoRay;
     aoRay.Origin = origin;
     aoRay.Direction = direction;
@@ -272,7 +272,7 @@ RTHitInfo traceIndirectRay(float3 origin, float3 direction, float maxDistance)
 // Check sun visibility from a point (shadow ray)
 float traceSunShadow(float3 position, float3 sunDir)
 {
-    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> shadowQuery;
+    RayQuery<RAY_FLAG_NONE> shadowQuery;
     RayDesc shadowRay;
     shadowRay.Origin = position;
     shadowRay.Direction = sunDir;

@@ -54,18 +54,29 @@ float froxelZToDepth(int z)
     return FROXEL_NEAR + (FROXEL_FAR - FROXEL_NEAR) * pow(normalizedZ, FROXEL_DISTRIBUTION);
 }
 
-float3 froxelToWorld(int3 froxelCoord, float3 viewOrigin, float4x4 invViewProj)
+// Simplified world position calculation using screen UV and depth
+float3 froxelToWorldSimple(int3 froxelCoord, float3 viewOrigin)
 {
-    float2 ndc = (float2(froxelCoord.xy) + 0.5) / float2(FROXEL_X, FROXEL_Y) * 2.0 - 1.0;
-    ndc.y = -ndc.y;
+    // Convert froxel XY to screen UV
+    float2 uv = (float2(froxelCoord.xy) + 0.5) / float2(FROXEL_X, FROXEL_Y);
 
+    // Get depth for this froxel slice
     float depth = froxelZToDepth(froxelCoord.z);
 
-    float4 clipPos = float4(ndc, 0.5, 1.0);
-    float4 worldPos = mul(invViewProj, clipPos);
-    worldPos.xyz /= worldPos.w;
+    // Calculate view direction using NDC and approximate FOV
+    float2 ndc = uv * 2.0 - 1.0;
+    ndc.y = -ndc.y;
 
-    float3 viewDir = normalize(worldPos.xyz - viewOrigin);
+    // Approximate view direction (using typical Minecraft FOV ~70 degrees)
+    float tanHalfFov = tan(radians(35.0));
+    float aspectRatio = float(FROXEL_X) / float(FROXEL_Y);
+
+    float3 viewDir;
+    viewDir.x = ndc.x * tanHalfFov * aspectRatio;
+    viewDir.y = ndc.y * tanHalfFov;
+    viewDir.z = 1.0;
+    viewDir = normalize(viewDir);
+
     return viewOrigin + viewDir * depth;
 }
 
@@ -150,7 +161,7 @@ float3 traceSunInscatter(float3 worldPos, float3 viewDir, float3 sunDir, float3 
 #endif
 
     // Check sun visibility using raytracing
-    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> sunQuery;
+    RayQuery<RAY_FLAG_NONE> sunQuery;
     RayDesc sunRay;
     sunRay.Origin = worldPos;
     sunRay.Direction = sunDir;
@@ -198,7 +209,7 @@ void CalculateGIInscatterInline(
         return;
 
     float3 viewOrigin = g_view.viewOriginSteveSpace;
-    float3 worldPos = froxelToWorld(froxelCoord, viewOrigin, g_view.viewInverseProjection);
+    float3 worldPos = froxelToWorldSimple(froxelCoord, viewOrigin);
     float3 viewDir = normalize(worldPos - viewOrigin);
 
     float3 sunDir = getTrueDirectionToSun();
