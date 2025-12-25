@@ -23,8 +23,8 @@
 
 // =============================================================================
 // OpenRTX Global Illumination System
-// Path-traced global illumination with multi-bounce support
-// Inspired by SEUS PTGI techniques
+// Hardware-accelerated raytraced global illumination using DXR
+// Uses deterministic ray directions and single-bounce indirect lighting
 // =============================================================================
 
 #ifndef __OPENRTX_GI_HLSL__
@@ -35,29 +35,6 @@
 // =============================================================================
 // GI STRUCTURES
 // =============================================================================
-
-// Ray traversal data for efficient voxel-based ray marching
-struct GIRayData
-{
-    float3 origin;          // Ray origin in world space
-    float3 direction;       // Normalized ray direction
-    float3 invDirection;    // 1.0 / direction for efficient intersection
-    float maxDistance;      // Maximum trace distance
-};
-
-// GI hit result containing illumination data
-struct GIHitResult
-{
-    bool hit;               // Did the ray hit something?
-    float distance;         // Distance to hit
-    float3 position;        // World position of hit
-    float3 normal;          // Surface normal at hit
-    float3 albedo;          // Surface albedo color
-    float3 emission;        // Emissive light from surface
-    float roughness;        // Surface roughness
-    float metalness;        // Surface metalness
-    float ao;               // Ambient occlusion at hit
-};
 
 // Material properties for GI calculations
 struct GIMaterial
@@ -74,24 +51,96 @@ struct GIResult
 {
     float3 diffuse;         // Diffuse indirect lighting
     float3 specular;        // Specular indirect lighting (glossy reflections)
-    float3 emission;        // Accumulated emissive light
-    float ao;               // Screen-space AO factor
+    float3 emission;        // Accumulated emissive light from nearby sources
+    float ao;               // Raytraced ambient occlusion factor
     float visibility;       // Overall visibility (for shadows)
 };
 
+// Raytraced hit information
+struct RTHitInfo
+{
+    bool hit;               // Did the ray hit something?
+    float distance;         // Distance to hit
+    float3 position;        // World position of hit
+    float3 normal;          // Surface normal at hit
+    float3 albedo;          // Surface albedo color
+    float3 emission;        // Emissive light from surface
+};
+
 // =============================================================================
-// GI UTILITY FUNCTIONS
+// DETERMINISTIC RAY DIRECTIONS
 // =============================================================================
 
-// Initialize GI ray from origin and direction
-GIRayData initGIRay(float3 origin, float3 direction, float maxDist)
+// Pre-computed hemisphere sample directions for consistent raytracing
+// These are distributed using Fibonacci spiral for uniform coverage
+static const float3 kHemisphereDirs[16] = {
+    float3(0.0000, 1.0000, 0.0000),   // Up
+    float3(0.5257, 0.8507, 0.0000),   // Upper ring
+    float3(0.1625, 0.8507, 0.5000),
+    float3(-0.4253, 0.8507, 0.3090),
+    float3(-0.4253, 0.8507, -0.3090),
+    float3(0.1625, 0.8507, -0.5000),
+    float3(0.6882, 0.5257, 0.5000),   // Middle ring
+    float3(-0.2629, 0.5257, 0.8090),
+    float3(-0.8507, 0.5257, 0.0000),
+    float3(-0.2629, 0.5257, -0.8090),
+    float3(0.6882, 0.5257, -0.5000),
+    float3(0.5878, 0.3090, 0.7500),   // Lower ring
+    float3(-0.4755, 0.3090, 0.8236),
+    float3(-0.9511, 0.3090, 0.0000),
+    float3(-0.4755, 0.3090, -0.8236),
+    float3(0.5878, 0.3090, -0.7500)
+};
+
+// Transform hemisphere direction to align with surface normal
+float3 alignToNormal(float3 dir, float3 normal)
 {
-    GIRayData ray;
-    ray.origin = origin;
-    ray.direction = normalize(direction);
-    ray.invDirection = 1.0 / (ray.direction + sign(ray.direction) * 1e-7);
-    ray.maxDistance = maxDist;
-    return ray;
+    // Build tangent space from normal
+    float3 up = abs(normal.y) < 0.999 ? float3(0, 1, 0) : float3(1, 0, 0);
+    float3 tangent = normalize(cross(up, normal));
+    float3 bitangent = cross(normal, tangent);
+
+    // Transform direction from Y-up to normal-aligned
+    return normalize(tangent * dir.x + normal * dir.y + bitangent * dir.z);
+}
+
+// Get deterministic ray direction for sample index
+float3 getGIRayDirection(float3 normal, int sampleIndex, int totalSamples)
+{
+    int idx = sampleIndex % 16;
+    float3 localDir = kHemisphereDirs[idx];
+    return alignToNormal(localDir, normal);
+}
+
+// =============================================================================
+// TEMPORAL JITTER (for noise reduction across frames)
+// =============================================================================
+
+// Get frame-based jitter offset for temporal accumulation
+float2 getTemporalJitter(float time)
+{
+    // 8-frame Halton sequence rotation
+    int frame = int(time * 60.0) % 8;
+    static const float2 kHaltonSequence[8] = {
+        float2(0.5, 0.333),
+        float2(0.25, 0.666),
+        float2(0.75, 0.111),
+        float2(0.125, 0.444),
+        float2(0.625, 0.777),
+        float2(0.375, 0.222),
+        float2(0.875, 0.555),
+        float2(0.0625, 0.888)
+    };
+    return kHaltonSequence[frame];
+}
+
+// R2 quasi-random sequence for sample distribution
+float2 getR2Sequence(int n)
+{
+    const float g = 1.32471795724474602596;
+    const float a1 = 1.0 / g;
+    const float a2 = 1.0 / (g * g);
+    return frac(float2(a1, a2) * float(n) + 0.5);
 }
 
 // Initialize empty GI result
@@ -106,163 +155,129 @@ GIResult initGIResult()
     return result;
 }
 
-// Blue noise sampling for temporal stability
-// Based on interleaved gradient noise with temporal offset
-float3 getGIBlueNoise(float2 pixelCoord, float time, int sampleIndex)
-{
-    // Interleaved gradient noise (fast, good distribution)
-    float2 offset = float2(sampleIndex * 7.0 + time * 50.0, sampleIndex * 11.0 + time * 30.0);
-    float2 coord = pixelCoord + offset;
-
-    float3 noise;
-    noise.x = frac(52.9829189 * frac(dot(coord, float2(0.06711056, 0.00583715))));
-    noise.y = frac(52.9829189 * frac(dot(coord + 100.0, float2(0.06711056, 0.00583715))));
-    noise.z = frac(52.9829189 * frac(dot(coord + 200.0, float2(0.06711056, 0.00583715))));
-
-    return noise;
-}
-
-// R2 quasi-random sequence for better sample distribution
-float2 getR2Sequence(int n)
-{
-    // Plastic constant derived from tribonacci
-    const float g = 1.32471795724474602596;
-    const float a1 = 1.0 / g;
-    const float a2 = 1.0 / (g * g);
-
-    return frac(float2(a1, a2) * float(n) + 0.5);
-}
-
-// Cosine-weighted hemisphere sampling
-float3 sampleCosineHemisphere(float2 xi, float3 normal)
-{
-    // Build tangent space
-    float3 tangent = normalize(cross(normal, abs(normal.y) < 0.999 ? float3(0, 1, 0) : float3(1, 0, 0)));
-    float3 bitangent = cross(normal, tangent);
-
-    // Cosine-weighted sampling
-    float r = sqrt(xi.x);
-    float theta = 2.0 * kPi * xi.y;
-
-    float3 localDir;
-    localDir.x = r * cos(theta);
-    localDir.y = r * sin(theta);
-    localDir.z = sqrt(max(0.0, 1.0 - xi.x));
-
-    // Transform to world space
-    return normalize(tangent * localDir.x + bitangent * localDir.y + normal * localDir.z);
-}
-
-// GGX importance sampling for specular GI
-float3 sampleGGXHemisphere(float2 xi, float3 normal, float roughness)
-{
-    float a = roughness * roughness;
-    float a2 = a * a;
-
-    float phi = 2.0 * kPi * xi.x;
-    float cosTheta = sqrt((1.0 - xi.y) / (1.0 + (a2 - 1.0) * xi.y));
-    float sinTheta = sqrt(1.0 - cosTheta * cosTheta);
-
-    // Microfacet normal in tangent space
-    float3 H;
-    H.x = sinTheta * cos(phi);
-    H.y = sinTheta * sin(phi);
-    H.z = cosTheta;
-
-    // Build tangent space
-    float3 up = abs(normal.z) < 0.999 ? float3(0, 0, 1) : float3(1, 0, 0);
-    float3 tangent = normalize(cross(up, normal));
-    float3 bitangent = cross(normal, tangent);
-
-    // Transform to world space
-    return normalize(tangent * H.x + bitangent * H.y + normal * H.z);
-}
-
 // =============================================================================
-// VISIBILITY AND OCCLUSION
+// RAYTRACED AMBIENT OCCLUSION (RTAO)
 // =============================================================================
 
-// Calculate ambient occlusion factor using cone tracing approximation
-float calculateGIAO(float3 position, float3 normal, float2 pixelCoord, float time, int samples)
+// Trace a single occlusion ray using hardware RT
+float traceOcclusionRay(float3 origin, float3 direction, float maxDistance)
+{
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> aoQuery;
+    RayDesc aoRay;
+    aoRay.Origin = origin;
+    aoRay.Direction = direction;
+    aoRay.TMin = 0.001;
+    aoRay.TMax = maxDistance;
+
+    aoQuery.TraceRayInline(SceneBVH, RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0xff, aoRay);
+
+    while (aoQuery.Proceed())
+    {
+        HitInfo hitInfo = GetCandidateHitInfo(aoQuery);
+        if (AlphaTestHitLogic(hitInfo))
+        {
+            aoQuery.CommitNonOpaqueTriangleHit();
+        }
+    }
+
+    if (aoQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+    {
+        float hitDist = aoQuery.CommittedRayT();
+        // Smooth distance-weighted occlusion
+        return saturate(hitDist / maxDistance);
+    }
+
+    return 1.0;  // No occlusion
+}
+
+// Calculate raytraced ambient occlusion using deterministic ray directions
+float calculateRTAO(float3 position, float3 normal, int samples, float time)
 {
 #if !GI_AMBIENT_OCCLUSION
     return 1.0;
 #endif
 
-    float occlusion = 0.0;
-    float maxOcclusionDist = GI_AO_RADIUS;
+    float visibility = 0.0;
+    float3 biasedPos = position + normal * 0.02;
 
-    [loop]
-    for (int i = 0; i < samples; i++)
+    // Use temporal rotation for sample distribution
+    int frameOffset = int(time * 60.0) % 4;
+
+    [unroll]
+    for (int i = 0; i < samples && i < 8; i++)
     {
-        // Get sample direction in hemisphere
-        float2 xi = getGIBlueNoise(pixelCoord, time, i).xy;
-        xi = frac(xi + getR2Sequence(i));
+        int sampleIdx = (i + frameOffset) % 16;
+        float3 rayDir = getGIRayDirection(normal, sampleIdx, samples);
 
-        float3 sampleDir = sampleCosineHemisphere(xi, normal);
-
-        // Trace short ray for AO
-        RayQuery<RAY_FLAG_NONE> aoQuery;
-        RayDesc aoRay;
-        aoRay.Origin = position + normal * 0.01;
-        aoRay.Direction = sampleDir;
-        aoRay.TMin = 0.0;
-        aoRay.TMax = maxOcclusionDist;
-
-        aoQuery.TraceRayInline(SceneBVH, RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0xff, aoRay);
-
-        while (aoQuery.Proceed())
-        {
-            HitInfo hitInfo = GetCandidateHitInfo(aoQuery);
-            if (AlphaTestHitLogic(hitInfo))
-            {
-                aoQuery.CommitNonOpaqueTriangleHit();
-            }
-        }
-
-        if (aoQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
-        {
-            float hitDist = aoQuery.CommittedRayT();
-            // Distance-weighted occlusion
-            float occlusionFactor = 1.0 - saturate(hitDist / maxOcclusionDist);
-            occlusion += occlusionFactor * occlusionFactor;
-        }
+        // Trace occlusion ray
+        float sampleVisibility = traceOcclusionRay(biasedPos, rayDir, GI_AO_RADIUS);
+        visibility += sampleVisibility;
     }
 
-    occlusion /= float(samples);
-    return saturate(1.0 - occlusion * GI_AO_STRENGTH);
+    visibility /= float(min(samples, 8));
+    return lerp(1.0, visibility, GI_AO_STRENGTH);
 }
 
 // =============================================================================
-// LIGHT SAMPLING
+// RAYTRACED INDIRECT LIGHTING
 // =============================================================================
 
-// Sample sunlight GI contribution
-float3 calculateSunlightGI(
-    float3 position,
-    float3 normal,
-    float3 albedo,
-    float3 sunDir,
-    float3 sunColor,
-    float sunIntensity)
+// Trace a single indirect ray and return hit information
+RTHitInfo traceIndirectRay(float3 origin, float3 direction, float maxDistance)
 {
-#if !GI_SUNLIGHT
-    return 0.0;
-#endif
+    RTHitInfo result;
+    result.hit = false;
+    result.distance = maxDistance;
+    result.position = origin + direction * maxDistance;
+    result.normal = -direction;
+    result.albedo = 0.0;
+    result.emission = 0.0;
 
-    // Direct sun contribution with hemisphere visibility
-    float NdotL = saturate(dot(normal, sunDir));
+    RayQuery<RAY_FLAG_NONE> indirectQuery;
+    RayDesc indirectRay;
+    indirectRay.Origin = origin;
+    indirectRay.Direction = direction;
+    indirectRay.TMin = 0.001;
+    indirectRay.TMax = maxDistance;
 
-    if (NdotL <= 0.0)
-        return 0.0;
+    indirectQuery.TraceRayInline(SceneBVH, RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0xff, indirectRay);
 
-    // Simple shadow check
-    RayQuery<RAY_FLAG_NONE> shadowQuery;
+    while (indirectQuery.Proceed())
+    {
+        HitInfo hitInfo = GetCandidateHitInfo(indirectQuery);
+        if (AlphaTestHitLogic(hitInfo))
+        {
+            indirectQuery.CommitNonOpaqueTriangleHit();
+        }
+    }
+
+    if (indirectQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+    {
+        HitInfo hitInfo = GetCommittedHitInfo(indirectQuery);
+        ObjectInstance objectInstance = objectInstances[hitInfo.objectInstanceIndex];
+        GeometryInfo geometryInfo = GetGeometryInfo(hitInfo, objectInstance);
+        SurfaceInfo surfaceInfo = MaterialVanilla(hitInfo, geometryInfo, objectInstance);
+
+        result.hit = true;
+        result.distance = hitInfo.rayT;
+        result.position = surfaceInfo.position;
+        result.normal = surfaceInfo.normal;
+        result.albedo = surfaceInfo.color;
+        result.emission = surfaceInfo.color * surfaceInfo.emissive * EMISSIVE_INTENSITY;
+    }
+
+    return result;
+}
+
+// Check sun visibility from a point (shadow ray)
+float traceSunShadow(float3 position, float3 sunDir)
+{
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> shadowQuery;
     RayDesc shadowRay;
-    shadowRay.Origin = position + normal * 0.01;
+    shadowRay.Origin = position;
     shadowRay.Direction = sunDir;
-    shadowRay.TMin = 0.0;
-    shadowRay.TMax = GI_MAX_DISTANCE;
+    shadowRay.TMin = 0.001;
+    shadowRay.TMax = GI_MAX_DISTANCE * 2.0;
 
     shadowQuery.TraceRayInline(SceneBVH, RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0xff, shadowRay);
 
@@ -275,166 +290,16 @@ float3 calculateSunlightGI(
         }
     }
 
-    if (shadowQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
-    {
-        // In shadow - return minimal ambient
-        return albedo * sunColor * 0.05 * GI_SUNLIGHT_STRENGTH;
-    }
-
-    // Lit by sun
-    return albedo * sunColor * sunIntensity * NdotL * GI_SUNLIGHT_STRENGTH;
-}
-
-// Sample skylight GI contribution (ambient sky hemisphere)
-float3 calculateSkylightGI(
-    float3 position,
-    float3 normal,
-    float3 albedo,
-    float3 skyColor,
-    float2 pixelCoord,
-    float time)
-{
-#if !GI_SKYLIGHT
-    return 0.0;
-#endif
-
-    float3 skylightAccum = 0.0;
-    int samples = GI_SKYLIGHT_SAMPLES;
-
-    [loop]
-    for (int i = 0; i < samples; i++)
-    {
-        // Sample sky hemisphere
-        float2 xi = getGIBlueNoise(pixelCoord, time, i + 100).xy;
-        xi = frac(xi + getR2Sequence(i));
-
-        float3 sampleDir = sampleCosineHemisphere(xi, normal);
-
-        // Check if this direction can see the sky
-        RayQuery<RAY_FLAG_NONE> skyQuery;
-        RayDesc skyRay;
-        skyRay.Origin = position + normal * 0.01;
-        skyRay.Direction = sampleDir;
-        skyRay.TMin = 0.0;
-        skyRay.TMax = GI_MAX_DISTANCE;
-
-        skyQuery.TraceRayInline(SceneBVH, RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0xff, skyRay);
-
-        while (skyQuery.Proceed())
-        {
-            HitInfo hitInfo = GetCandidateHitInfo(skyQuery);
-            if (AlphaTestHitLogic(hitInfo))
-            {
-                skyQuery.CommitNonOpaqueTriangleHit();
-            }
-        }
-
-        if (skyQuery.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
-        {
-            // Sees sky - add sky contribution
-            // Weight by hemisphere direction (more from above)
-            float skyWeight = saturate(sampleDir.y * 0.5 + 0.5);
-            skylightAccum += skyColor * skyWeight;
-        }
-    }
-
-    skylightAccum /= float(samples);
-    return albedo * skylightAccum * GI_SKYLIGHT_STRENGTH;
-}
-
-// Sample blocklight (emissive) GI contribution
-float3 calculateBlocklightGI(
-    float3 position,
-    float3 normal,
-    float3 albedo,
-    float2 pixelCoord,
-    float time,
-    int samples)
-{
-#if !GI_BLOCKLIGHT
-    return 0.0;
-#endif
-
-    float3 blocklightAccum = 0.0;
-    float totalWeight = 0.0;
-
-    [loop]
-    for (int i = 0; i < samples; i++)
-    {
-        // Generate random direction in hemisphere
-        float3 noise = getGIBlueNoise(pixelCoord, time, i);
-        float2 xi = frac(noise.xy + getR2Sequence(i));
-
-        float3 sampleDir = sampleCosineHemisphere(xi, normal);
-
-        // Trace ray looking for emissive surfaces
-        RayQuery<RAY_FLAG_NONE> emissiveQuery;
-        RayDesc emissiveRay;
-        emissiveRay.Origin = position + normal * 0.01;
-        emissiveRay.Direction = sampleDir;
-        emissiveRay.TMin = 0.0;
-        emissiveRay.TMax = GI_BLOCKLIGHT_RANGE;
-
-        emissiveQuery.TraceRayInline(SceneBVH, RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0xff, emissiveRay);
-
-        while (emissiveQuery.Proceed())
-        {
-            HitInfo hitInfo = GetCandidateHitInfo(emissiveQuery);
-            if (AlphaTestHitLogic(hitInfo))
-            {
-                emissiveQuery.CommitNonOpaqueTriangleHit();
-            }
-        }
-
-        if (emissiveQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
-        {
-            HitInfo hitInfo = GetCommittedHitInfo(emissiveQuery);
-            ObjectInstance objectInstance = objectInstances[hitInfo.objectInstanceIndex];
-            GeometryInfo geometryInfo = GetGeometryInfo(hitInfo, objectInstance);
-            SurfaceInfo surfaceInfo = MaterialVanilla(hitInfo, geometryInfo, objectInstance);
-
-            // Check if hit surface is emissive
-            if (surfaceInfo.emissive > 0.01)
-            {
-                float distance = hitInfo.rayT;
-
-                // Physically-based inverse square falloff with range limit
-                float falloff = 1.0 / (1.0 + distance * distance * GI_BLOCKLIGHT_FALLOFF);
-
-                // Emissive surface contributes light
-                float3 emittedLight = surfaceInfo.color * surfaceInfo.emissive * EMISSIVE_INTENSITY;
-
-                // Weight by angle (cosine already from hemisphere sampling)
-                float weight = falloff;
-                blocklightAccum += emittedLight * weight;
-                totalWeight += weight;
-            }
-            else
-            {
-                // Non-emissive hit - could do indirect bounce here
-                // For now, add tiny ambient contribution
-                float distance = hitInfo.rayT;
-                float falloff = 1.0 / (1.0 + distance * distance * 0.1);
-                blocklightAccum += surfaceInfo.color * 0.01 * falloff;
-                totalWeight += 0.1;
-            }
-        }
-    }
-
-    if (totalWeight > 0.0)
-    {
-        blocklightAccum /= totalWeight;
-    }
-
-    return albedo * blocklightAccum * GI_BLOCKLIGHT_STRENGTH;
+    return (shadowQuery.CommittedStatus() != COMMITTED_TRIANGLE_HIT) ? 1.0 : 0.0;
 }
 
 // =============================================================================
-// DIFFUSE GI (Multi-bounce)
+// SINGLE-BOUNCE INDIRECT LIGHTING
 // =============================================================================
 
-// Single bounce diffuse GI
-float3 traceDiffuseBounce(
+// Calculate indirect diffuse lighting using raytracing
+// Uses single bounce for performance, with direct lighting at hit points
+float3 calculateIndirectDiffuse(
     float3 position,
     float3 normal,
     float3 albedo,
@@ -442,115 +307,167 @@ float3 traceDiffuseBounce(
     float3 sunColor,
     float sunIntensity,
     float3 skyColor,
-    float2 pixelCoord,
-    float time,
-    int bounceIndex)
-{
-    // Generate sample direction
-    float3 noise = getGIBlueNoise(pixelCoord, time, bounceIndex);
-    float2 xi = frac(noise.xy + getR2Sequence(bounceIndex));
-
-    float3 sampleDir = sampleCosineHemisphere(xi, normal);
-
-    // Trace ray
-    RayQuery<RAY_FLAG_NONE> bounceQuery;
-    RayDesc bounceRay;
-    bounceRay.Origin = position + normal * 0.01;
-    bounceRay.Direction = sampleDir;
-    bounceRay.TMin = 0.0;
-    bounceRay.TMax = GI_MAX_DISTANCE;
-
-    bounceQuery.TraceRayInline(SceneBVH, RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0xff, bounceRay);
-
-    while (bounceQuery.Proceed())
-    {
-        HitInfo hitInfo = GetCandidateHitInfo(bounceQuery);
-        if (AlphaTestHitLogic(hitInfo))
-        {
-            bounceQuery.CommitNonOpaqueTriangleHit();
-        }
-    }
-
-    float3 bounceLight = 0.0;
-
-    if (bounceQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
-    {
-        HitInfo hitInfo = GetCommittedHitInfo(bounceQuery);
-        ObjectInstance objectInstance = objectInstances[hitInfo.objectInstanceIndex];
-        GeometryInfo geometryInfo = GetGeometryInfo(hitInfo, objectInstance);
-        SurfaceInfo surfaceInfo = MaterialVanilla(hitInfo, geometryInfo, objectInstance);
-
-        float distance = hitInfo.rayT;
-
-        // Get hit surface lighting
-        float3 hitNormal = surfaceInfo.normal;
-        float NdotL = saturate(dot(hitNormal, sunDir));
-
-        // Direct light at hit point
-        float3 hitDirect = surfaceInfo.color * sunColor * sunIntensity * NdotL;
-
-        // Emissive contribution (with indirect boost)
-        float3 hitEmissive = surfaceInfo.color * surfaceInfo.emissive * EMISSIVE_INTENSITY * INDIRECT_EMISSIVE_BOOST;
-
-        // Ambient at hit point
-        float3 hitAmbient = surfaceInfo.color * skyColor * 0.2;
-
-        // Combine hit surface lighting
-        bounceLight = hitDirect + hitEmissive + hitAmbient;
-
-        // Distance falloff
-        float falloff = 1.0 / (1.0 + distance * distance * GI_DISTANCE_FALLOFF);
-        bounceLight *= falloff;
-    }
-    else
-    {
-        // Hit sky - sample sky color in that direction
-        float skyBrightness = saturate(sampleDir.y * 0.5 + 0.5);
-        bounceLight = skyColor * skyBrightness * 0.5;
-    }
-
-    // Apply surface albedo (diffuse transfer)
-    return albedo * bounceLight;
-}
-
-// Full diffuse GI with multiple bounces
-float3 calculateDiffuseGI(
-    float3 position,
-    float3 normal,
-    float3 albedo,
-    float3 sunDir,
-    float3 sunColor,
-    float sunIntensity,
-    float3 skyColor,
-    float2 pixelCoord,
+    int samples,
     float time)
 {
 #if !GI_DIFFUSE_BOUNCES
     return 0.0;
 #endif
 
-    float3 diffuseGI = 0.0;
-    int samples = GI_DIFFUSE_SAMPLES;
+    float3 indirectLight = 0.0;
+    float3 biasedPos = position + normal * 0.02;
 
-    // First bounce
-    [loop]
-    for (int i = 0; i < samples; i++)
+    // Temporal rotation for better coverage
+    int frameOffset = int(time * 60.0) % 8;
+
+    [unroll]
+    for (int i = 0; i < samples && i < 8; i++)
     {
-        diffuseGI += traceDiffuseBounce(
-            position, normal, albedo,
-            sunDir, sunColor, sunIntensity, skyColor,
-            pixelCoord, time, i);
+        int sampleIdx = (i * 2 + frameOffset) % 16;
+        float3 rayDir = getGIRayDirection(normal, sampleIdx, samples);
+
+        // Trace indirect ray
+        RTHitInfo hit = traceIndirectRay(biasedPos, rayDir, GI_MAX_DISTANCE);
+
+        float3 sampleLight = 0.0;
+
+        if (hit.hit)
+        {
+            // Calculate lighting at hit point
+            float hitNdotL = saturate(dot(hit.normal, sunDir));
+
+            // Check sun visibility at hit point
+            float sunShadow = traceSunShadow(hit.position + hit.normal * 0.02, sunDir);
+
+            // Direct sun contribution at hit surface
+            sampleLight += hit.albedo * sunColor * sunIntensity * hitNdotL * sunShadow;
+
+            // Emissive contribution (light sources)
+            sampleLight += hit.emission * INDIRECT_EMISSIVE_BOOST;
+
+            // Ambient sky approximation at hit
+            float skyVisibility = saturate(hit.normal.y * 0.5 + 0.5);
+            sampleLight += hit.albedo * skyColor * skyVisibility * 0.2;
+
+            // Distance falloff
+            float falloff = 1.0 / (1.0 + hit.distance * hit.distance * GI_DISTANCE_FALLOFF);
+            sampleLight *= falloff;
+        }
+        else
+        {
+            // Hit sky - sample sky color
+            float skyBrightness = saturate(rayDir.y * 0.5 + 0.5);
+            sampleLight = skyColor * skyBrightness * 0.3;
+        }
+
+        indirectLight += sampleLight;
     }
 
-    diffuseGI /= float(samples);
-    return diffuseGI * GI_DIFFUSE_STRENGTH;
+    indirectLight /= float(min(samples, 8));
+
+    // Apply surface albedo (diffuse transfer)
+    return albedo * indirectLight * GI_DIFFUSE_STRENGTH;
 }
 
 // =============================================================================
-// SPECULAR GI (Glossy Reflections)
+// EMISSIVE LIGHT GATHERING
 // =============================================================================
 
-float3 calculateSpecularGI(
+// Gather light from nearby emissive surfaces using raytracing
+float3 gatherEmissiveLight(
+    float3 position,
+    float3 normal,
+    float3 albedo,
+    int samples,
+    float time)
+{
+#if !GI_BLOCKLIGHT
+    return 0.0;
+#endif
+
+    float3 emissiveLight = 0.0;
+    float3 biasedPos = position + normal * 0.02;
+
+    // Temporal rotation
+    int frameOffset = int(time * 60.0) % 4;
+
+    [unroll]
+    for (int i = 0; i < samples && i < 8; i++)
+    {
+        int sampleIdx = (i + frameOffset * 2) % 16;
+        float3 rayDir = getGIRayDirection(normal, sampleIdx, samples);
+
+        // Trace ray looking for emissive surfaces
+        RTHitInfo hit = traceIndirectRay(biasedPos, rayDir, GI_BLOCKLIGHT_RANGE);
+
+        if (hit.hit)
+        {
+            // Check for emissive
+            float emissiveStrength = length(hit.emission);
+            if (emissiveStrength > 0.01)
+            {
+                // Distance-based falloff
+                float falloff = 1.0 / (1.0 + hit.distance * hit.distance * GI_BLOCKLIGHT_FALLOFF);
+                emissiveLight += hit.emission * falloff;
+            }
+        }
+    }
+
+    emissiveLight /= float(min(samples, 8));
+
+    return albedo * emissiveLight * GI_BLOCKLIGHT_STRENGTH;
+}
+
+// =============================================================================
+// SKY VISIBILITY
+// =============================================================================
+
+// Calculate sky visibility factor using raytracing
+float3 calculateSkyVisibility(
+    float3 position,
+    float3 normal,
+    float3 skyColor,
+    int samples,
+    float time)
+{
+#if !GI_SKYLIGHT
+    return skyColor * 0.5;  // Fallback ambient
+#endif
+
+    float visibleSamples = 0.0;
+    float3 biasedPos = position + normal * 0.02;
+
+    // Check upward hemisphere for sky visibility
+    int frameOffset = int(time * 60.0) % 4;
+
+    [unroll]
+    for (int i = 0; i < samples && i < 4; i++)
+    {
+        int sampleIdx = (i + frameOffset) % 6;  // Use upper hemisphere samples
+        float3 rayDir = getGIRayDirection(normal, sampleIdx, samples);
+
+        // Only check if direction has positive sky component
+        if (rayDir.y > 0.1)
+        {
+            float vis = traceOcclusionRay(biasedPos, rayDir, GI_MAX_DISTANCE);
+            visibleSamples += vis;
+        }
+        else
+        {
+            visibleSamples += 0.5;  // Partial visibility for side directions
+        }
+    }
+
+    float skyFactor = visibleSamples / float(min(samples, 4));
+    return skyColor * skyFactor * GI_SKYLIGHT_STRENGTH;
+}
+
+// =============================================================================
+// RAYTRACED SPECULAR (Single-bounce glossy reflections)
+// =============================================================================
+
+// Calculate specular indirect using raytracing with reflection direction
+float3 calculateSpecularIndirect(
     float3 position,
     float3 normal,
     float3 viewDir,
@@ -561,7 +478,6 @@ float3 calculateSpecularGI(
     float3 sunColor,
     float sunIntensity,
     float3 skyColor,
-    float2 pixelCoord,
     float time)
 {
 #if !GI_SPECULAR
@@ -572,90 +488,65 @@ float3 calculateSpecularGI(
     if (roughness > GI_SPECULAR_MAX_ROUGHNESS)
         return 0.0;
 
-    float3 specularGI = 0.0;
-    int samples = GI_SPECULAR_SAMPLES;
+    // Calculate reflection direction
+    float3 reflectDir = reflect(-viewDir, normal);
 
-    // Calculate F0 for Fresnel
-    float3 f0 = lerp(float3(0.04, 0.04, 0.04), albedo, metalness);
-
-    [loop]
-    for (int i = 0; i < samples; i++)
+    // Add roughness-based cone spread using temporal jitter
+    if (roughness > 0.05)
     {
-        // Generate sample direction using GGX importance sampling
-        float3 noise = getGIBlueNoise(pixelCoord, time, i + 200);
-        float2 xi = frac(noise.xy + getR2Sequence(i));
+        float2 jitter = getTemporalJitter(time) * 2.0 - 1.0;
+        float3 tangent = normalize(cross(normal, abs(normal.y) < 0.999 ? float3(0, 1, 0) : float3(1, 0, 0)));
+        float3 bitangent = cross(normal, tangent);
 
-        float3 H = sampleGGXHemisphere(xi, normal, max(roughness, 0.04));
-        float3 reflectDir = reflect(-viewDir, H);
+        float coneAngle = roughness * roughness * 0.5;
+        reflectDir = normalize(reflectDir + (tangent * jitter.x + bitangent * jitter.y) * coneAngle);
 
-        // Skip if reflection direction goes into surface
-        if (dot(reflectDir, normal) <= 0.0)
-            continue;
-
-        // Trace reflection ray
-        RayQuery<RAY_FLAG_NONE> specQuery;
-        RayDesc specRay;
-        specRay.Origin = position + normal * 0.01;
-        specRay.Direction = reflectDir;
-        specRay.TMin = 0.0;
-        specRay.TMax = GI_MAX_DISTANCE;
-
-        specQuery.TraceRayInline(SceneBVH, RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0xff, specRay);
-
-        while (specQuery.Proceed())
-        {
-            HitInfo hitInfo = GetCandidateHitInfo(specQuery);
-            if (AlphaTestHitLogic(hitInfo))
-            {
-                specQuery.CommitNonOpaqueTriangleHit();
-            }
-        }
-
-        float3 sampleLight = 0.0;
-
-        if (specQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
-        {
-            HitInfo hitInfo = GetCommittedHitInfo(specQuery);
-            ObjectInstance objectInstance = objectInstances[hitInfo.objectInstanceIndex];
-            GeometryInfo geometryInfo = GetGeometryInfo(hitInfo, objectInstance);
-            SurfaceInfo surfaceInfo = MaterialVanilla(hitInfo, geometryInfo, objectInstance);
-
-            // Shade reflected surface
-            float3 hitNormal = surfaceInfo.normal;
-            float NdotL = saturate(dot(hitNormal, sunDir));
-
-            sampleLight = surfaceInfo.color * sunColor * sunIntensity * NdotL;
-            sampleLight += surfaceInfo.color * surfaceInfo.emissive * EMISSIVE_INTENSITY;
-            sampleLight += surfaceInfo.color * skyColor * 0.1;
-        }
-        else
-        {
-            // Hit sky
-            float skyBrightness = saturate(reflectDir.y * 0.5 + 0.5);
-            sampleLight = skyColor * skyBrightness;
-        }
-
-        // Apply Fresnel
-        float NdotV = saturate(dot(normal, viewDir));
-        float VdotH = saturate(dot(viewDir, H));
-        float3 fresnel = f0 + (1.0 - f0) * pow(1.0 - VdotH, 5.0);
-
-        specularGI += sampleLight * fresnel;
+        // Ensure reflection stays above surface
+        if (dot(reflectDir, normal) < 0.0)
+            reflectDir = reflect(-viewDir, normal);
     }
 
-    specularGI /= float(samples);
+    float3 biasedPos = position + normal * 0.02;
 
-    // Roughness-based fade
+    // Trace reflection ray
+    RTHitInfo hit = traceIndirectRay(biasedPos, reflectDir, GI_MAX_DISTANCE);
+
+    float3 specularLight = 0.0;
+
+    if (hit.hit)
+    {
+        // Calculate lighting at hit point
+        float hitNdotL = saturate(dot(hit.normal, sunDir));
+        float sunShadow = traceSunShadow(hit.position + hit.normal * 0.02, sunDir);
+
+        specularLight += hit.albedo * sunColor * sunIntensity * hitNdotL * sunShadow;
+        specularLight += hit.emission;
+        specularLight += hit.albedo * skyColor * 0.15;
+    }
+    else
+    {
+        // Hit sky
+        float skyBrightness = saturate(reflectDir.y * 0.5 + 0.5);
+        specularLight = skyColor * skyBrightness;
+    }
+
+    // Apply Fresnel
+    float3 f0 = lerp(float3(0.04, 0.04, 0.04), albedo, metalness);
+    float NdotV = saturate(dot(normal, viewDir));
+    float3 fresnel = f0 + (1.0 - f0) * pow(1.0 - NdotV, 5.0);
+
+    // Roughness fade
     float roughnessFade = 1.0 - saturate(roughness / GI_SPECULAR_MAX_ROUGHNESS);
 
-    return specularGI * GI_SPECULAR_STRENGTH * roughnessFade;
+    return specularLight * fresnel * GI_SPECULAR_STRENGTH * roughnessFade;
 }
 
 // =============================================================================
-// MAIN GI CALCULATION
+// MAIN RAYTRACED GI CALCULATION
 // =============================================================================
 
-// Calculate complete global illumination for a surface
+// Calculate complete raytraced global illumination for a surface
+// Uses hardware-accelerated raytracing with deterministic directions
 GIResult calculateGI(
     float3 position,
     float3 normal,
@@ -672,7 +563,6 @@ GIResult calculateGI(
     GIResult result = initGIResult();
 
 #if !ENABLE_ADVANCED_GI
-    // Fallback to simple emissive GI only
     return result;
 #endif
 
@@ -682,53 +572,47 @@ GIResult calculateGI(
     int skylightSamples = quality == 0 ? 1 : (quality == 1 ? 2 : GI_SKYLIGHT_SAMPLES);
     int blocklightSamples = quality == 0 ? 2 : (quality == 1 ? 4 : GI_BLOCKLIGHT_SAMPLES);
 
-    // Ambient Occlusion
+    // Raytraced Ambient Occlusion
 #if GI_AMBIENT_OCCLUSION
-    result.ao = calculateGIAO(position, normal, pixelCoord, time, aoSamples);
+    result.ao = calculateRTAO(position, normal, aoSamples, time);
 #endif
 
-    // Sunlight GI (direct + shadowed)
-#if GI_SUNLIGHT
-    float3 sunGI = calculateSunlightGI(position, normal, material.albedo, sunDir, sunColor, sunIntensity);
-    result.diffuse += sunGI;
-#endif
-
-    // Skylight GI (ambient hemisphere)
+    // Sky visibility (raytraced)
 #if GI_SKYLIGHT
-    float3 skyGI = calculateSkylightGI(position, normal, material.albedo, skyColor, pixelCoord, time);
-    result.diffuse += skyGI;
+    float3 skyGI = calculateSkyVisibility(position, normal, skyColor, skylightSamples, time);
+    result.diffuse += material.albedo * skyGI;
 #endif
 
-    // Blocklight GI (emissive sources)
+    // Emissive light gathering (raytraced)
 #if GI_BLOCKLIGHT
-    float3 blockGI = calculateBlocklightGI(position, normal, material.albedo, pixelCoord, time, blocklightSamples);
-    result.emission += blockGI;
+    float3 emissiveGI = gatherEmissiveLight(position, normal, material.albedo, blocklightSamples, time);
+    result.emission += emissiveGI;
 #endif
 
-    // Diffuse bounce GI
+    // Single-bounce indirect diffuse (raytraced)
 #if GI_DIFFUSE_BOUNCES
-    float3 diffuseBounce = calculateDiffuseGI(
+    float3 indirectDiffuse = calculateIndirectDiffuse(
         position, normal, material.albedo,
         sunDir, sunColor, sunIntensity, skyColor,
-        pixelCoord, time);
-    result.diffuse += diffuseBounce;
+        diffuseSamples, time);
+    result.diffuse += indirectDiffuse;
 #endif
 
-    // Specular GI (glossy reflections)
+    // Specular indirect (raytraced reflection)
 #if GI_SPECULAR
     if (material.roughness < GI_SPECULAR_MAX_ROUGHNESS)
     {
-        result.specular = calculateSpecularGI(
+        result.specular = calculateSpecularIndirect(
             position, normal, viewDir,
             material.albedo, material.roughness, material.metalness,
             sunDir, sunColor, sunIntensity, skyColor,
-            pixelCoord, time);
+            time);
     }
 #endif
 
     // Apply AO to indirect lighting
     result.diffuse *= result.ao;
-    result.emission *= lerp(1.0, result.ao, 0.5);  // Partial AO on emission
+    result.emission *= lerp(1.0, result.ao, 0.5);
 
     return result;
 }
