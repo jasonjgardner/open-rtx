@@ -1154,7 +1154,7 @@ void RenderVanillaOpenRTX(HitInfo hitInfo, inout OpenRTXRayState rayState, OpenR
             ctx.sunDir,
             ctx.sunColor,
             ctx.sunIntensity,
-            ctx.skyColor,
+            ctx.gameSkyColor,
             pixelCoord,
             ctx.time,
             GI_QUALITY);
